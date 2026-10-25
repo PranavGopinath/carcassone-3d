@@ -3,7 +3,7 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { runToolLoop } from '../lib/orchestrator.mjs';
 import { checkImportBoundaries } from '../gates/imports.mjs';
-import { captureShot, startDevServer, launchHardwareBrowser, captureGameplayScriptOnPage, createSpikeFilmstrip } from './capture.mjs';
+import { captureShot, startDevServer, launchHardwareBrowser, captureGameplayScriptOnPage } from './capture.mjs';
 import { createSpikeFilmstrip as makeFilmstrip } from './judge.mjs';
 
 export function getBaselineTestFiles(workDir, startCommit) {
