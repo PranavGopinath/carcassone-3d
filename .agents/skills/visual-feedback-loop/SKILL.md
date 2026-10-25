@@ -27,7 +27,7 @@ The loop runs with **no human in it**. Implement the whole spec; where something
 
 1. **The evaluation is immutable; the product is not.** During a run the patcher may edit anything in the worktree **except** `protectedPaths` (rubric, references, loop scripts, gates, config, skills) and the **baseline tests** (every file under `tests/` tracked at the run's start commit). It may **add** new tests under `regressionTestDir`. After every patcher turn, `git diff --name-status <startCommit>` must show no change to a protected path or baseline test; if it does, the iteration is rejected and reset, whatever the judges say.
 2. **Never record in real time.** Freeze the app's clock, render each frame by time, and screenshot it. Video is stitched from those frames.
-3. **Measurements beat opinions.** A failing hard check (`audit:*`, `frameDiff`, `blankFrame`, `stepErrors`) fails its rubric item whatever a judge says. If `audit()` doesn't return a field the rubric names, the item fails with a defect asking the patcher to add that measurement to the app's audit.
+3. **Measurements beat opinions.** A failing hard check (`audit:*`, `frameDiff`, `blankFrame`, `stepErrors`) fails its rubric item whatever a judge says. An `audit:<field>` source passes when the field is `true`, `0`, an empty array, or an object whose `ok` is `true`; anything else fails, with the field's value and the audit's `details` as evidence. If `audit()` doesn't return a field the rubric names, the item fails with a defect asking the patcher to add that measurement to the app's audit.
 4. **The rubric is the goal, and it has two kinds of item** (see §2). `defect` items ask "is something broken?"; `fidelity` items ask "how far is this from the reference?". The loop is not done while either kind has open failures. Passing every defect item on art that looks nothing like the references is not success.
 5. **`GEMINI_API_KEY` is read only by Node** (`node --env-file=.env`). Never use a `VITE_` prefix and never log it.
 6. **High effort everywhere.** Every judge, pairwise, patcher and escalation call uses `gemini-4-argon` with `thinking: "high"` and media at `media_resolution` high. Pass both explicitly on each call. Don't downgrade to save budget; the budget cap ends the run instead.
@@ -55,21 +55,24 @@ On startup:
 1. Start `devCommand` once per run. Load the page fresh for every capture. **No HMR**: stale WebGL state gives wrong frames.
 2. Use Playwright Chromium (`npx playwright install --only-shell chromium`) with the configured viewport and `deviceScaleFactor`, and GPU flags (macOS: `--use-angle=metal`). Read the renderer string via `WEBGL_debug_renderer_info`. **Fail** on SwiftShader or any software renderer.
 3. Before frame 0, wait for fonts (`document.fonts.ready`) and textures (the `ready` hook if present). Check that `inspect` mode drives `performance.now`, `Date`, `requestAnimationFrame` and `Math.random` from `t` and the seed. Anything that animates by wall clock is a determinism defect.
-4. For each `t` at `timeline.fps`, call `renderAt(t)` and take a `page.screenshot` clipped to the canvas. Don't use `toDataURL`.
+4. For each `t` at `timeline.fps`, call `renderAt(t)` and take a `page.screenshot` clipped to the canvas. Don't use `toDataURL` on the WebGL canvas (it needs `preserveDrawingBuffer`); a 2D canvas returned by a hook, like the tile sheet, can be read with `toDataURL`.
 5. Take the configured canvas `shots` and the tile sheet. Then take each `pageShots` entry: set its `view`, `renderAt(t)`, and take a **full-page** screenshot (not clipped), so the HUD and overlays are graded. Save `audit()` output plus page console errors to `audit.json`.
 6. **Gameplay capture.** For each script in `gameplay.scripts`, and for each view in `gameplay.views` when the script has `perView: true` (otherwise once, from its `startView`):
    1. Reload the page, call `setView(view)` instantly, and reset the play clock with `playAt(0)`.
    2. Walk time from 0 to `duration` at `gameplay.fps`. Before rendering the first frame at or after a step's `at`, apply the step: `call` invokes that hook on `window[global]` with `args`; `click` dispatches a real Playwright click on the selector, so HUD wiring is tested too. Then `playAt(t)` and take a **full-page** screenshot (gameplay is graded with its HUD).
    3. After each step settles (the frame before the next step), run `audit()` and keep its fields per step, so `audit:*` sources can be checked at every step of play, not just on a static board.
-   4. Record any console error or exception thrown during a step as a `stepErrors` hard-check failure, with the step and time.
+   4. Record any console error or exception thrown during a step as a `stepErrors` hard-check failure, with the step and time. Also record as `stepErrors`:
+      - a **no-op step**: a step after which neither `getState()` nor the frame changed (e.g. an unknown fixture name that silently loads the same board, or a bot move with no tiles left)
+      - a failed **expectation**: a step's `expect` is a JS expression over `before` and `after` (`getState()` snapshots around the step); a script's `expect` is one over `start` and `end` (around the whole script). Either evaluating to false is a failure naming the expression.
    5. Run `blankFrame` and `frameDiff` on the script's frames, and stitch `play-<scriptId>-<view>.webm`.
    Gameplay animation (tile drop, meeple drop, highlights, score popups, view morphs) must be driven by `playAt(t)`, never wall clock; if two captures of a script differ beyond tolerance, report a determinism defect.
 7. **Hard checks:**
    - `blankFrame`: any frame that is nearly a single color.
    - `frameDiff`: compute the changed-pixel fraction per consecutive pair **globally and per cell** of a `frameDiff.grid` (e.g. 8×8). Flag a spike when either (a) a cell's fraction exceeds `spikeFactor` × that cell's segment median, or (b) the **second-order** change `|d(t) − d(t−1)|` exceeds `spikeFactor` × its segment median. Smooth camera motion raises the first-order diff everywhere but keeps the second-order diff low; pop-in and z-fighting spike both locally and in the second order. Ignore frames on either side of a segment boundary. Do **not** exempt frames after a gameplay step: an intended change (a tile dropping in) is animated over several frames and stays under the second-order threshold, while a tile that pops in at once is exactly what this check must catch.
-   - `stepErrors`: any console error or exception during a gameplay step.
+   - `stepErrors`: any console error or exception, no-op step or failed expectation during a gameplay step.
+   - Run `frameDiff`, `blankFrame` and the determinism comparison on the **canvas region with DOM overlays masked out** (the bounding boxes of elements drawn over the canvas). Full-page frames are for the judges; HUD text changing instantly when the score updates is not a pop-in, and an out-of-scope HUD timer must not make the board look nondeterministic.
 8. Stitch frames with ffmpeg (`@ffmpeg-installer/ffmpeg` if there is no system ffmpeg). If stitching fails, continue with stills.
-9. Two captures of the same commit must match within a small per-pixel tolerance.
+9. Two captures of the same commit must match within a small per-pixel tolerance (on the masked canvas region, as above).
 10. Export `captureShot(workDir, shotId | {t} | {script, view, t})` as a cheap single-image path. Page shots and gameplay frames come back **full-page**, exactly as the judges see them, so HUD changes can be previewed. The patcher's `preview` tool uses it (§3).
 
 ## 2. Judges: `judge.mjs`
@@ -87,7 +90,7 @@ Both judges use `gemini-4-argon` and the `judge_a`/`judge_b` roles. They can't w
 ### Judges
 
 - **judge_a (motion):** one call per motion clip: the cinematic's `timeline.motionSegments` (clipped from `flight.webm` with `start_offset`/`end_offset`) and every gameplay video (`play-<scriptId>-<view>.webm`). Upload via the Files API and poll until `ACTIVE`. Use **static** processing, set `fps` near the capture rate, `media_resolution` high. With each clip send its step list as `MM:SS` labels ("00:02 bot places a tile", "00:05 click rotate"), so the judge knows what should happen when, and a labelled filmstrip of the frames around each `frameDiff` spike. Grade only the motion items for that segment and view.
-- **judge_b (stills):** one call per shot group and view. Send the shot plus a high-resolution crop for each `crop` item. Turn audit findings into **numbered marks drawn on the image**, not raw JSON. Send each item's `references`. For gameplay items with `at: "after-step"`, send the settled full-page frame after each step, labelled with the step.
+- **judge_b (stills):** one call per shot group and view. Send the shot plus a high-resolution crop for each `crop` item (`crop: true` crops to the item's marks or the region a previous verdict cited; `crop: "<css selector>"` crops a page shot to that element). An item with a `shots` list gets every listed image, labelled. Turn audit findings into **numbered marks drawn on the image**, not raw JSON: an item's `marks: "<name>"` draws the positions in `audit().marks[<name>]` (`[{ shot, x, y, label }]`). If the audit has no positions for that name, send the image unmarked and add a low-severity defect asking the patcher to expose them. Send each item's `references`. For gameplay items with `at: "after-step"`, send the settled full-page frame after each step, labelled with the step.
 
 ### Cross-view consistency items
 
@@ -95,7 +98,7 @@ An item with `pairViews: true` is judged on matching 2D and 3D images side by si
 
 ### Views
 
-An item with `views` is resolved once per view; its stored result is `{ view: verdict }` and it passes only if every view passes. Each defect carries its `view`, and so does its ID (`motion-G1-3d-1`). A gameplay item's `segment` names a script; for `perView` scripts it is judged on that script's capture in each listed view. A `{view}` in an item's `shot` expands per view (`ui-{view}` → `ui-2d`, `ui-3d`).
+An item with `views` is resolved once per view; its stored result is `{ view: verdict }` and it passes only if every view passes. Items whose evidence exists only once (a cinematic segment like `rise`, a script with `perView: false` like `toggle`, a `pairViews` item) are judged once; their `views` only declares which views they cover for the startup check. Each defect carries its `view`, and so does its ID (`motion-G1-3d-1`). A gameplay item's `segment` names a script; for `perView` scripts it is judged on that script's capture in each listed view. A `{view}` in an item's `shot` expands per view (`ui-{view}` → `ui-2d`, `ui-3d`).
 
 ### Merging verdicts
 
@@ -110,7 +113,7 @@ A separate call compares the best-so-far with the current iteration. Run it on *
 ### Golden set (real, before the first live run)
 
 The golden set measures whether the **vision judges** catch things, so hard checks are hidden from the judges for these cases. Include a cross-view case: remove one building or feature from one view only and confirm the consistency items catch it.
-1. **Injected defects.** Use the `injectDefect` hook (if the project has one) and capture-side perturbations (blank a frame, offset one mesh for one frame, duplicate a frame) to produce real broken captures: a floating prop, a blank morph frame, a hovering meeple, a frame of flicker, a pop-in, and in gameplay a tile placed with no drop animation and a HUD score that doesn't update after a completion. Run judge_a/judge_b on them, in both views.
+1. **Injected defects.** Use the `injectDefect` hook (if the project has one) and capture-side perturbations (blank a frame, offset one mesh for one frame, duplicate a frame) to produce real broken captures: a floating prop, a blank morph frame, a hovering meeple, a frame of flicker, a pop-in, and in gameplay a tile placed with no drop animation. Run judge_a/judge_b on them, in both views.
 2. **Fidelity calibration.** Grade each reference image as if it were the render (it must pass with no high gaps), and grade iteration 0's untouched draft (it must not pass if it visibly differs). A fidelity judge that passes both or fails both is broken; fix the prompt before running live.
 3. Record per-case results, recall, false positives and the real `interactionId` of every judge call in `runs/loop/golden.json`. A judge may fail a defect item without a hard check only for defect types it caught here.
 
@@ -130,6 +133,7 @@ The patcher is a **tool-using agent working inside the run's worktree**, not a s
    - open defects with their measurements, shot, region, and for fidelity gaps the matching reference image
    - the current image of each targeted shot
    - a file outline of `src/` (path, exported symbols, line counts); the agent reads what it needs
+   - the scope and correctness rules it must respect: `outOfScope` and `outOfScopePaths`, `protectedPaths`, hard rules 11–13 (scope, 2D/3D consistency with the tile spec as source of truth, realism as the style target)
    - escalation plan and launch `--notes`, if any
    - `triedLedger`: the last 8 failed attempts, one line each (`defectId, files, ≤25-word change, outcome`)
    Leave out old diffs and judge prose.
@@ -143,7 +147,7 @@ The patcher is a **tool-using agent working inside the run's worktree**, not a s
 node --env-file=.env scripts/loop/run.mjs [--max-iterations N] [--budget-usd X] [--notes "..."]
 ```
 
-1. Work in worktree `wt/loop-<runId>` on branch `loop/<runId>`, from `integration`, using the orchestrator's worktree helpers. Record `startCommit`.
+1. Work in worktree `wt/loop-<runId>` on branch `loop/<runId>`, from the config's `baseBranch` at its current tip, using the orchestrator's worktree helpers. Record `startCommit`.
 2. Iteration 0 captures and judges the untouched draft.
 3. Each later iteration: patcher → gate → capture → judge → compare against the best so far:
    - **Worse** if any hard check newly fails or any previously passing defect item now fails **in any view**. A fix in 3D that breaks 2D is a regression.
@@ -151,7 +155,7 @@ node --env-file=.env scripts/loop/run.mjs [--max-iterations N] [--budget-usd X] 
    - **Tie or worse:** `git reset --hard <bestCommit>` and add the attempted defects to `triedLedger`. If the same defect has failed twice, tell the patcher to try a structurally different fix.
 4. **Escalation, not a human gate.** After `limits.plateauIterations` non-improving iterations in a row, call `lead_architect` with the rubric history, `triedLedger`, best shots next to their references, and the file outline. It returns a diagnosis and a structural plan (refactors, new modules, a different technique). The next patcher iteration gets that plan and `patcher.escalatedMaxToolCalls`. If the escalated iteration also fails to improve, stop.
 5. **Stop** when every item passes, `maxIterations` is reached, the budget is spent, or escalation fails.
-6. **Finish automatically.** If the best iteration is strictly better than iteration 0, merge it into `integration` with `--no-ff` and remove the worktree. Otherwise leave the branch unmerged. Either way, write `runs/loop/<runId>/summary.json` (per-iteration rubric counts, best iteration, open defects, cost, merge result) and print it.
+6. **Finish automatically.** If the best iteration is strictly better than iteration 0, merge it into `baseBranch` locally with `--no-ff` (never push) and remove the worktree. Other people may have committed to `baseBranch` during the run: if the merge conflicts, abort it, leave `loop/<runId>` unmerged and list the conflicting files in the summary. Otherwise leave the branch unmerged. Either way, write `runs/loop/<runId>/summary.json` (per-iteration rubric counts, best iteration, open defects, cost, merge result) and print it.
 
 ## 5. Dashboard
 
@@ -172,10 +176,12 @@ Use a fake scene, `tests/fixtures/loop-scene.html`: a cube with the hooks.
 6. A worse or tied iteration resets to the best commit; a plateau triggers escalation; a failed escalation stops the loop; nothing reads stdin.
 7. Gameplay steps fire before the first frame at or after their `at`; a `click` on the fake scene's button changes state; a step that throws records a `stepErrors` failure.
 8. An item with `views: ["2d","3d"]` that passes in 2D and fails in 3D fails overall, and a change that fixes 3D but breaks 2D counts as worse.
+9. A fake-scene object that appears in one frame during a gameplay step trips `frameDiff`; the same object tweened over 5 frames does not.
 10. A `pairViews` item receives matching 2D and 3D images with the same tile marks; an object present in only one view of the fake scene produces a defect naming that tile.
 11. A patch touching `outOfScopePaths` is rejected, and a pairwise verdict of an out-of-scope change makes the iteration worse.
 12. A failing `reportOnly` item appears in the summary but never becomes a patcher defect and never changes the pass count.
-9. A fake-scene object that appears in one frame during a gameplay step trips `frameDiff`; the same object tweened over 5 frames does not.
+13. Unknown fixture names and steps that change nothing are recorded as `stepErrors`; a false `expect` names its expression.
+14. `frameDiff` ignores an instant HUD text change outside the canvas but catches the same change inside it.
 
 ## Definition of done
 
