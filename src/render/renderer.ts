@@ -132,173 +132,514 @@ const THEMES: Record<ThemeMode, ThemeConfig> = {
   },
 };
 
-/**
- * Paints a soft volumetric cumulus cloud cluster onto a 2D canvas context.
- * Matches the fluffy sunlit clouds in `reference/Design_of_game.jpeg` & `reference/UI_reference.jpg`.
- */
-function paintCumulusCloudCluster(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  scaleX: number,
-  scaleY: number,
-  seed: number,
-  warmTint = 1.0
-) {
-  const puffs: Array<{ ox: number; oy: number; r: number }> = [
-    { ox: -0.58, oy: 0.16, r: 0.46 },
-    { ox: -0.34, oy: -0.08, r: 0.56 },
-    { ox: -0.06, oy: -0.24, r: 0.68 },
-    { ox: 0.24, oy: -0.14, r: 0.58 },
-    { ox: 0.52, oy: 0.12, r: 0.48 },
-    { ox: -0.18, oy: 0.2, r: 0.54 },
-    { ox: 0.16, oy: 0.22, r: 0.54 },
-    { ox: 0.0, oy: 0.04, r: 0.64 },
-  ];
+function hash2D(ix: number, iy: number, seed: number): number {
+  const n = Math.sin(ix * 127.1 + iy * 311.7 + seed * 74.7) * 43758.5453123;
+  return n - Math.floor(n);
+}
 
-  // 1. Soft blue-grey ambient shadow base
-  for (const p of puffs) {
-    const jx = Math.sin(seed * 17.3 + p.ox * 9) * 0.05;
-    const jy = Math.cos(seed * 11.7 + p.oy * 9) * 0.04;
-    const px = cx + (p.ox + jx) * scaleX;
-    const py = cy + (p.oy + jy + 0.12) * scaleY;
-    const rad = p.r * Math.min(scaleX, scaleY * 1.35);
+function valueNoise2D(x: number, y: number, seed: number): number {
+  const ix = Math.floor(x);
+  const iy = Math.floor(y);
+  const fx = x - ix;
+  const fy = y - iy;
+  const ux = fx * fx * fx * (fx * (fx * 6 - 15) + 10);
+  const uy = fy * fy * fy * (fy * (fy * 6 - 15) + 10);
 
-    const shGrad = ctx.createRadialGradient(px, py + rad * 0.12, rad * 0.05, px, py, rad);
-    shGrad.addColorStop(0, 'rgba(138, 154, 174, 0.52)');
-    shGrad.addColorStop(0.55, 'rgba(154, 170, 188, 0.28)');
-    shGrad.addColorStop(1, 'rgba(168, 184, 202, 0)');
-    ctx.fillStyle = shGrad;
-    ctx.beginPath();
-    ctx.arc(px, py, rad, 0, Math.PI * 2);
-    ctx.fill();
+  const a = hash2D(ix, iy, seed);
+  const b = hash2D(ix + 1, iy, seed);
+  const c = hash2D(ix, iy + 1, seed);
+  const d = hash2D(ix + 1, iy + 1, seed);
+
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+
+function fbmSmooth(x: number, y: number, seed: number, octaves = 4): number {
+  let val = 0;
+  let amp = 0.5;
+  let freq = 1.0;
+  for (let i = 0; i < octaves; i++) {
+    val += amp * valueNoise2D(x * freq, y * freq, seed + i * 19.3);
+    freq *= 2.03;
+    amp *= 0.5;
   }
+  return val;
+}
 
-  // 2. Creamy mid-body volume puffs
-  for (const p of puffs) {
-    const jx = Math.sin(seed * 17.3 + p.ox * 9) * 0.05;
-    const jy = Math.cos(seed * 11.7 + p.oy * 9) * 0.04;
-    const px = cx + (p.ox + jx) * scaleX;
-    const py = cy + (p.oy + jy) * scaleY;
-    const rad = p.r * Math.min(scaleX, scaleY * 1.3);
-
-    const midGrad = ctx.createRadialGradient(
-      px + rad * 0.12,
-      py - rad * 0.16,
-      rad * 0.04,
-      px,
-      py,
-      rad
-    );
-    const rTop = Math.round(252 + 3 * warmTint);
-    const gTop = Math.round(246 + 4 * warmTint);
-    const bTop = Math.round(238);
-    midGrad.addColorStop(0, `rgba(${rTop}, ${gTop}, ${bTop}, 0.92)`);
-    midGrad.addColorStop(0.5, 'rgba(236, 232, 228, 0.68)');
-    midGrad.addColorStop(0.82, 'rgba(208, 214, 222, 0.22)');
-    midGrad.addColorStop(1, 'rgba(208, 214, 222, 0)');
-    ctx.fillStyle = midGrad;
-    ctx.beginPath();
-    ctx.arc(px, py, rad, 0, Math.PI * 2);
-    ctx.fill();
+function fbmSoftBillow(x: number, y: number, seed: number, octaves = 4): number {
+  let val = 0;
+  let amp = 0.5;
+  let freq = 1.0;
+  for (let i = 0; i < octaves; i++) {
+    const n = valueNoise2D(x * freq, y * freq, seed + i * 23.7) * 2.0 - 1.0;
+    const billow = 1.0 - Math.sqrt(n * n + 0.035);
+    val += amp * billow;
+    freq *= 2.05;
+    amp *= 0.5;
   }
+  return val;
+}
 
-  // 3. Crisp sunlit top-right crown highlights
-  for (const p of puffs.slice(1, 5)) {
-    const px = cx + (p.ox + 0.06) * scaleX;
-    const py = cy + (p.oy - 0.1) * scaleY;
-    const rad = p.r * Math.min(scaleX, scaleY * 1.1) * 0.78;
+function smax(a: number, b: number, k = 10.5): number {
+  const h = Math.max(0, Math.min(1, 0.5 + 0.5 * (b - a) * k));
+  return a * (1 - h) + b * h + (0.25 / k) * h * (1 - h);
+}
 
-    const hiGrad = ctx.createRadialGradient(px + rad * 0.15, py - rad * 0.18, 0, px, py, rad);
-    hiGrad.addColorStop(0, 'rgba(255, 253, 248, 0.85)');
-    hiGrad.addColorStop(0.55, 'rgba(255, 249, 240, 0.35)');
-    hiGrad.addColorStop(1, 'rgba(255, 249, 240, 0)');
-    ctx.fillStyle = hiGrad;
-    ctx.beginPath();
-    ctx.arc(px, py, rad, 0, Math.PI * 2);
-    ctx.fill();
-  }
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+interface CloudPuffSpec {
+  x: number;
+  y: number;
+  r: number;
+  h: number;
+  shadeBias?: number;
 }
 
 /**
- * Generates the atmospheric daylight sky + fluffy cumulus clouds background texture
- * matching `reference/Design_of_game.jpeg` and `reference/UI_reference.jpg`.
+ * Renders a volumetric, FBM-textured 3D cumulus cloud cluster matching `reference/Design_of_game.jpeg`.
+ * Uses intersecting 3D spherical domes, billowy cauliflower relief, raymarched self-shadowing,
+ * inter-lobe crease ambient occlusion, and optical-thickness edge feathering.
  */
-function createCloudSkyTexture(theme: ThemeMode = 'day'): THREE.CanvasTexture {
-  const w = 1024;
-  const h = 768;
+function paintSculpted3DCloud(
+  ctx: CanvasRenderingContext2D,
+  canvasWidth: number,
+  canvasHeight: number,
+  cx: number,
+  cy: number,
+  rx: number,
+  ry: number,
+  seed: number,
+  mainPuffs: CloudPuffSpec[],
+  shadowStrength = 1.0,
+  warmBoost = 0.0
+) {
+  const puffs = mainPuffs.map((p) => ({ ...p, shadeBias: p.shadeBias ?? 0 }));
+
+  // Generate secondary cauliflower sub-lobes (plump, rounded turrets)
+  for (let i = 0; i < mainPuffs.length; i++) {
+    const p = mainPuffs[i];
+    const subCount = 4;
+    for (let j = 0; j < subCount; j++) {
+      const idx = i * subCount + j;
+      const ang = (j / subCount) * Math.PI * 2 + (hash2D(idx, 1, seed) - 0.5) * 0.85;
+      const dist = p.r * (0.38 + hash2D(idx, 2, seed) * 0.36);
+      const sr = p.r * (0.46 + hash2D(idx, 3, seed) * 0.24);
+      puffs.push({
+        x: p.x + Math.cos(ang) * dist,
+        y: p.y + Math.sin(ang) * dist * 0.88,
+        r: sr,
+        h: p.h * (0.72 + hash2D(idx, 4, seed) * 0.24),
+        shadeBias: (p.shadeBias ?? 0) + (Math.sin(ang) * 0.09 - Math.cos(ang) * 0.09),
+      });
+    }
+  }
+
+  const padX = Math.ceil(rx * 1.65);
+  const padY = Math.ceil(ry * 1.65);
+  const x0 = Math.max(0, Math.floor(cx - padX));
+  const y0 = Math.max(0, Math.floor(cy - padY));
+  const x1 = Math.min(canvasWidth, Math.ceil(cx + padX));
+  const y1 = Math.min(canvasHeight, Math.ceil(cy + padY));
+  const bw = x1 - x0;
+  const bh = y1 - y0;
+  if (bw <= 0 || bh <= 0) return;
+
+  const imgData = ctx.getImageData(x0, y0, bw, bh);
+  const data = imgData.data;
+
+  const scale = Math.min(rx, ry);
+  const H = new Float32Array(bw * bh);
+  const D = new Float32Array(bw * bh);
+  const NX = new Float32Array(bw * bh);
+  const NY = new Float32Array(bw * bh);
+  const BIAS = new Float32Array(bw * bh);
+
+  for (let py = 0; py < bh; py++) {
+    const v = (y0 + py - cy) / ry;
+    const rowOff = py * bw;
+    for (let px = 0; px < bw; px++) {
+      const u = (x0 + px - cx) / rx;
+
+      // Organic FBM domain warp for fluffy cumulus contours
+      const wx = (fbmSmooth(u * 2.1, v * 2.1, seed + 1.3, 3) - 0.5) * 0.24;
+      const wy = (fbmSmooth(u * 2.1 + 4.1, v * 2.1 + 2.9, seed + 2.7, 3) - 0.5) * 0.24;
+      const wu = u + wx;
+      const wv = v + wy;
+
+      let maxH = 0;
+      let maxRem = 0;
+      let weightedNx = 0;
+      let weightedNy = 0;
+      let weightedBias = 0;
+      let weightSum = 0;
+
+      for (let i = 0; i < puffs.length; i++) {
+        const P = puffs[i];
+        const dx = (wu - P.x) / P.r;
+        const dy = (wv - P.y) / P.r;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < 1.0) {
+          const dist = Math.sqrt(d2);
+          const linearRem = 1.0 - dist;
+          const rem = 1.0 - d2;
+          const sphereZ = P.h * Math.sqrt(rem);
+          maxH = maxH === 0 ? sphereZ : smax(maxH, sphereZ, 10.5);
+          if (linearRem * P.h > maxRem) {
+            maxRem = linearRem * P.h;
+          }
+
+          const w = Math.exp(sphereZ * 6.0) * rem * rem;
+          weightedNx += dx * P.h * w;
+          weightedNy += dy * P.h * w;
+          weightedBias += (P.shadeBias ?? 0) * w;
+          weightSum += w;
+        }
+      }
+
+      if (maxRem <= 0.001) continue;
+
+      // Multi-octave billowy turbulence & wispy edge erosion
+      const softBillow = fbmSoftBillow(wu * 3.2, wv * 3.2, seed + 8.5, 4);
+      const wispyFbm = fbmSmooth(wu * 4.8, wv * 4.8, seed + 19.1, 4);
+      const fineFbm = fbmSmooth(wu * 9.5, wv * 9.5, seed + 31.4, 3);
+
+      const edgeNoise = (wispyFbm - 0.48) * 0.24 + (fineFbm - 0.5) * 0.09;
+      const rawRem = maxRem + edgeNoise * Math.min(1, maxRem * 2.2);
+      const edgeAlpha = smoothstep(0.0, 0.46, rawRem);
+      if (edgeAlpha <= 0.002) continue;
+
+      const totalH =
+        maxH * (0.84 + 0.16 * softBillow) +
+        (softBillow - 0.48) * 0.11 * edgeAlpha +
+        (fineFbm - 0.5) * 0.032 * edgeAlpha;
+
+      H[rowOff + px] = Math.max(0, totalH);
+      D[rowOff + px] = edgeAlpha;
+      if (weightSum > 0) {
+        NX[rowOff + px] = weightedNx / weightSum;
+        NY[rowOff + px] = weightedNy / weightSum;
+        BIAS[rowOff + px] = weightedBias / weightSum;
+      }
+    }
+  }
+
+  // Sun direction vector (from upper-right, elevated — matching Design_of_game.jpeg)
+  const sunX = 0.68;
+  const sunY = -0.54;
+  const sunZ = 0.49;
+  const stepScale = scale * 0.055;
+  const stepB = Math.max(2, Math.round(scale * 0.03));
+  const aoStep1 = Math.max(3, Math.round(scale * 0.055));
+  const aoStep2 = Math.max(6, Math.round(scale * 0.115));
+
+  for (let py = 0; py < bh; py++) {
+    const rowOff = py * bw;
+    const v = (y0 + py - cy) / ry;
+    for (let px = 0; px < bw; px++) {
+      const alphaMask = D[rowOff + px];
+      if (alphaMask <= 0.002) continue;
+
+      const hCenter = H[rowOff + px];
+      const u = (x0 + px - cx) / rx;
+
+      // Optical thickness: thin outer vapor transmits ambient sky/sunlight; dense interior holds deep 3D relief
+      const coreThickness = smoothstep(0.15, 0.82, alphaMask);
+
+      // 1. Combine analytical puff normal with interior billow derivative
+      const hR = H[rowOff + Math.min(bw - 1, px + stepB)] || hCenter;
+      const hL = H[rowOff + Math.max(0, px - stepB)] || hCenter;
+      const hU = H[Math.max(0, py - stepB) * bw + px] || hCenter;
+      const hD = H[Math.min(bh - 1, py + stepB) * bw + px] || hCenter;
+
+      const bScale = (scale / (2.0 * stepB * 1.85)) * coreThickness;
+      let nx = (NX[rowOff + px] * 0.7 - (hR - hL) * bScale * 0.55) * coreThickness;
+      let ny = (NY[rowOff + px] * 0.7 - (hD - hU) * bScale * 0.55) * coreThickness;
+      let nz = 0.8;
+      const nLen = Math.hypot(nx, ny, nz) || 1.0;
+      nx /= nLen;
+      ny /= nLen;
+      nz /= nLen;
+
+      const rawNdotL = nx * sunX + ny * sunY + nz * sunZ;
+      const wrappedDiffuse = Math.max(0, Math.min(1, (rawNdotL + 0.4) / 1.4));
+
+      // 2. Crease Ambient Occlusion inside valleys between overlapping puffs
+      const nR1 = H[rowOff + Math.min(bw - 1, px + aoStep1)] || hCenter;
+      const nL1 = H[rowOff + Math.max(0, px - aoStep1)] || hCenter;
+      const nU1 = H[Math.max(0, py - aoStep1) * bw + px] || hCenter;
+      const nD1 = H[Math.min(bh - 1, py + aoStep1) * bw + px] || hCenter;
+      const avgNear = 0.25 * (nR1 + nL1 + nU1 + nD1);
+
+      const nR2 = H[rowOff + Math.min(bw - 1, px + aoStep2)] || hCenter;
+      const nL2 = H[rowOff + Math.max(0, px - aoStep2)] || hCenter;
+      const nU2 = H[Math.max(0, py - aoStep2) * bw + px] || hCenter;
+      const nD2 = H[Math.min(bh - 1, py + aoStep2) * bw + px] || hCenter;
+      const avgFar = 0.25 * (nR2 + nL2 + nU2 + nD2);
+
+      const valleyDepth =
+        (Math.max(0, avgNear - hCenter) * 3.4 + Math.max(0, avgFar - hCenter) * 2.2) *
+        coreThickness;
+      const creaseAO = Math.exp(-valleyDepth * 2.6 * shadowStrength);
+
+      // 3. Soft 3D Raymarched Self-Shadow toward the upper-right sun
+      let shadowOcc = 0;
+      for (let s = 1; s <= 6; s++) {
+        const distPx = s * stepScale;
+        const sx = Math.min(bw - 1, Math.max(0, Math.round(px + sunX * distPx)));
+        const sy = Math.min(bh - 1, Math.max(0, Math.round(py + sunY * distPx)));
+        const sampleH = H[sy * bw + sx] * D[sy * bw + sx];
+        const rayH = hCenter * alphaMask + (sunZ * distPx) / (scale * 1.35);
+        if (sampleH > rayH) {
+          shadowOcc += (sampleH - rayH) * 1.5;
+        }
+      }
+      const selfShadow = Math.exp(-shadowOcc * 1.45 * shadowStrength * coreThickness);
+
+      // 4. Macro cloud light + internal FBM texture modulation
+      const fineVapor = fbmSmooth(u * 8.5, v * 8.5, seed + 41.2, 3) - 0.5;
+      const globalLight = Math.max(
+        0,
+        Math.min(
+          1,
+          0.56 + u * 0.24 - v * 0.28 - BIAS[rowOff + px] * 0.38 * coreThickness + fineVapor * 0.08
+        )
+      );
+
+      const coreLight =
+        (wrappedDiffuse * 0.54 + globalLight * 0.32 + Math.min(1, hCenter * 0.55) * 0.14) *
+        (0.3 + 0.7 * selfShadow) *
+        (0.36 + 0.64 * creaseAO);
+
+      // At thin outer vapor edges, lift light toward warm sunlit/ambient mist so edges dissolve softly
+      const edgeMistLight = 0.74 + 0.2 * Math.max(-0.4, Math.min(1, u * 0.55 - v * 0.55));
+      const totalLight = Math.max(
+        0,
+        Math.min(1, coreLight * coreThickness + edgeMistLight * (1.0 - coreThickness))
+      );
+
+      // 5. Warm color ramp matching Design_of_game.jpeg
+      let r: number;
+      let g: number;
+      let b: number;
+      const shR = Math.max(102, Math.round(122 - (shadowStrength - 0.85) * 44));
+      const shG = Math.max(120, Math.round(142 - (shadowStrength - 0.85) * 38));
+      const shB = Math.max(142, Math.round(164 - (shadowStrength - 0.85) * 28));
+
+      if (totalLight < 0.36) {
+        const t = totalLight / 0.36;
+        const st = t * t * (3 - 2 * t);
+        r = shR + (176 - shR) * st;
+        g = shG + (175 - shG) * st;
+        b = shB + (185 - shB) * st;
+      } else if (totalLight < 0.68) {
+        const t = (totalLight - 0.36) / 0.32;
+        const st = t * t * (3 - 2 * t);
+        r = 176 + (234 - 176) * st;
+        g = 175 + (221 - 175) * st;
+        b = 185 + (212 - 185) * st;
+      } else {
+        const t = (totalLight - 0.68) / 0.32;
+        const st = t * (2 - t);
+        r = 234 + (255 - 234) * st;
+        g = 221 + (249 - 221) * st;
+        b = 212 + (238 - 212) * st;
+      }
+
+      if (warmBoost > 0) {
+        r = Math.min(255, r + warmBoost * 8);
+        b = Math.max(0, b - warmBoost * 10);
+      }
+
+      const alpha = Math.pow(alphaMask, 1.45) * 0.96;
+      const idx = (rowOff + px) * 4;
+      const bgR = data[idx];
+      const bgG = data[idx + 1];
+      const bgB = data[idx + 2];
+
+      data[idx] = Math.round(bgR + (r - bgR) * alpha);
+      data[idx + 1] = Math.round(bgG + (g - bgG) * alpha);
+      data[idx + 2] = Math.round(bgB + (b - bgB) * alpha);
+      data[idx + 3] = 255;
+    }
+  }
+
+  ctx.putImageData(imgData, x0, y0);
+}
+
+/**
+ * Generates the subtle, warm daylight sky + fewer, richly textured 3D cumulus clouds background texture
+ * matching `reference/Design_of_game.jpeg`.
+ */
+function createCloudSkyTexture(theme: ThemeMode = 'day', compact = false): THREE.CanvasTexture {
+  const w = compact ? 640 : 1280;
+  const h = compact ? 400 : 800;
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext('2d');
 
   if (ctx) {
-    // 1. Base diagonal sky gradient (cool zenith blue on top-left -> warm sunlit ivory-gold on right)
-    const skyGrad = ctx.createLinearGradient(0, 0, w, h * 0.92);
+    // 1. Subtle, warm, low-grey daylight sky gradient (soft warm powder sky-blue -> warm sunlit cream in upper-right)
+    const skyGrad = ctx.createLinearGradient(0, h * 0.85, w, h * 0.08);
     if (theme === 'golden') {
-      skyGrad.addColorStop(0, '#6d8cb0');
-      skyGrad.addColorStop(0.45, '#b8a9b6');
-      skyGrad.addColorStop(0.8, '#ebbfa0');
-      skyGrad.addColorStop(1, '#fae0c3');
+      skyGrad.addColorStop(0, '#96b4cc');
+      skyGrad.addColorStop(0.38, '#bfaebb');
+      skyGrad.addColorStop(0.75, '#e8c4a8');
+      skyGrad.addColorStop(1, '#fae4cc'.replace(/[^#0-9a-fA-F]/g, ''));
     } else if (theme === 'overcast') {
-      skyGrad.addColorStop(0, '#8097b0');
-      skyGrad.addColorStop(0.55, '#a8bacb');
-      skyGrad.addColorStop(1, '#d5dde6');
+      skyGrad.addColorStop(0, '#a2b8cb');
+      skyGrad.addColorStop(0.55, '#bfd0de');
+      skyGrad.addColorStop(1, '#e4e8ec');
     } else {
-      skyGrad.addColorStop(0, '#83a4c6');
-      skyGrad.addColorStop(0.38, '#a4c0da');
-      skyGrad.addColorStop(0.72, '#c8d9e8');
-      skyGrad.addColorStop(1, '#f3e6d6');
+      skyGrad.addColorStop(0, '#acc7da');
+      skyGrad.addColorStop(0.35, '#b8d0e0');
+      skyGrad.addColorStop(0.68, '#c9dce7');
+      skyGrad.addColorStop(0.88, '#dce4e7');
+      skyGrad.addColorStop(1, '#ede8df');
     }
     ctx.fillStyle = skyGrad;
     ctx.fillRect(0, 0, w, h);
 
-    // 2. Warm solar glow on upper-right horizon (matching Design_of_game.jpeg)
-    const sunGlow = ctx.createRadialGradient(w * 0.92, h * 0.28, 10, w * 0.88, h * 0.35, w * 0.65);
-    sunGlow.addColorStop(0, 'rgba(255, 248, 232, 0.72)');
-    sunGlow.addColorStop(0.4, 'rgba(253, 238, 216, 0.32)');
-    sunGlow.addColorStop(1, 'rgba(253, 238, 216, 0)');
+    // 2. Soft warm golden-cream sunlight bloom in the upper-right corner (matching Design_of_game.jpeg)
+    const sunGlow = ctx.createRadialGradient(w * 0.95, h * 0.08, 10, w * 0.88, h * 0.18, w * 0.72);
+    sunGlow.addColorStop(0, 'rgba(255, 248, 236, 0.58)');
+    sunGlow.addColorStop(0.42, 'rgba(250, 240, 226, 0.26)');
+    sunGlow.addColorStop(0.78, 'rgba(244, 236, 224, 0.08)');
+    sunGlow.addColorStop(1, 'rgba(244, 236, 224, 0)');
     ctx.fillStyle = sunGlow;
     ctx.fillRect(0, 0, w, h);
 
-    // 3. Distant wispy cirrus/alto-cumulus layers
-    const cloudPlacements: Array<{ x: number; y: number; sx: number; sy: number; seed: number }> = [
-      { x: w * 0.25, y: h * 0.1, sx: 170, sy: 95, seed: 1.1 },
-      { x: w * 0.8, y: h * 0.17, sx: 190, sy: 110, seed: 2.3 },
-      { x: w * 0.06, y: h * 0.26, sx: 110, sy: 68, seed: 3.7 },
-      { x: w * 0.16, y: h * 0.32, sx: 165, sy: 105, seed: 4.9 },
-      { x: w * 0.56, y: h * 0.38, sx: 175, sy: 98, seed: 6.2 },
-      { x: w * 0.7, y: h * 0.55, sx: 95, sy: 62, seed: 7.4 },
-      { x: w * 0.22, y: h * 0.78, sx: 145, sy: 92, seed: 8.8 },
-      { x: w * 0.77, y: h * 0.78, sx: 195, sy: 125, seed: 10.1 },
-      { x: w * 0.28, y: h * 0.94, sx: 180, sy: 100, seed: 11.5 },
-      { x: w * 0.62, y: h * 0.92, sx: 155, sy: 88, seed: 12.9 },
+    // 3. Fewer, richly textured peripheral 3D cumulus clouds matching Design_of_game.jpeg
+    const clouds: Array<{
+      cx: number;
+      cy: number;
+      rx: number;
+      ry: number;
+      seed: number;
+      shadow: number;
+      puffs: CloudPuffSpec[];
+    }> = [
+      // 1. Top-left wide cumulus cluster
+      {
+        cx: w * 0.23,
+        cy: h * 0.055,
+        rx: w * 0.135,
+        ry: h * 0.092,
+        seed: 1.7,
+        shadow: 0.85,
+        puffs: [
+          { x: -0.62, y: 0.14, r: 0.44, h: 0.62, shadeBias: 0.15 },
+          { x: -0.3, y: -0.04, r: 0.56, h: 0.82, shadeBias: 0.05 },
+          { x: 0.06, y: -0.14, r: 0.6, h: 0.92, shadeBias: -0.08 },
+          { x: 0.4, y: -0.02, r: 0.52, h: 0.78, shadeBias: -0.1 },
+          { x: 0.7, y: 0.16, r: 0.4, h: 0.58, shadeBias: -0.05 },
+          { x: -0.12, y: 0.22, r: 0.5, h: 0.72, shadeBias: 0.22 },
+          { x: 0.24, y: 0.2, r: 0.46, h: 0.66, shadeBias: 0.1 },
+        ],
+      },
+      // 2. Far mid-left small puff
+      {
+        cx: w * 0.038,
+        cy: h * 0.255,
+        rx: w * 0.062,
+        ry: h * 0.058,
+        seed: 4.3,
+        shadow: 0.72,
+        puffs: [
+          { x: -0.38, y: 0.12, r: 0.5, h: 0.64, shadeBias: 0.1 },
+          { x: 0.02, y: -0.1, r: 0.6, h: 0.84, shadeBias: -0.08 },
+          { x: 0.42, y: 0.14, r: 0.46, h: 0.62, shadeBias: -0.05 },
+          { x: 0.06, y: 0.2, r: 0.48, h: 0.66, shadeBias: 0.12 },
+        ],
+      },
+      // 3. Top-right hero cumulus cloud
+      {
+        cx: w * 0.815,
+        cy: h * 0.175,
+        rx: w * 0.145,
+        ry: h * 0.128,
+        seed: 7.9,
+        shadow: 0.92,
+        puffs: [
+          { x: -0.58, y: 0.1, r: 0.46, h: 0.68, shadeBias: 0.2 },
+          { x: -0.24, y: 0.02, r: 0.54, h: 0.82, shadeBias: 0.12 },
+          { x: 0.14, y: -0.2, r: 0.6, h: 0.98, shadeBias: -0.12 },
+          { x: 0.46, y: 0.04, r: 0.5, h: 0.84, shadeBias: -0.14 },
+          { x: 0.84, y: 0.36, r: 0.34, h: 0.54, shadeBias: -0.1 },
+          { x: -0.06, y: 0.24, r: 0.54, h: 0.78, shadeBias: 0.24 },
+          { x: 0.28, y: 0.24, r: 0.48, h: 0.72, shadeBias: 0.08 },
+        ],
+      },
+      // 4a. Bottom-left upper shaded cumulus puff
+      {
+        cx: w * 0.205,
+        cy: h * 0.745,
+        rx: w * 0.098,
+        ry: h * 0.092,
+        seed: 11.2,
+        shadow: 1.15,
+        puffs: [
+          { x: -0.44, y: 0.08, r: 0.5, h: 0.72, shadeBias: 0.32 },
+          { x: -0.04, y: -0.14, r: 0.6, h: 0.9, shadeBias: 0.12 },
+          { x: 0.36, y: 0.06, r: 0.5, h: 0.76, shadeBias: -0.05 },
+          { x: -0.08, y: 0.24, r: 0.54, h: 0.78, shadeBias: 0.36 },
+          { x: 0.22, y: 0.24, r: 0.44, h: 0.66, shadeBias: 0.18 },
+        ],
+      },
+      // 4b. Bottom-left lower warm base cumulus cluster
+      {
+        cx: w * 0.255,
+        cy: h * 0.935,
+        rx: w * 0.14,
+        ry: h * 0.1,
+        seed: 14.6,
+        shadow: 0.82,
+        puffs: [
+          { x: -0.56, y: 0.14, r: 0.48, h: 0.66, shadeBias: 0.14 },
+          { x: -0.18, y: -0.12, r: 0.6, h: 0.9, shadeBias: -0.06 },
+          { x: 0.22, y: -0.08, r: 0.56, h: 0.86, shadeBias: -0.1 },
+          { x: 0.56, y: 0.14, r: 0.46, h: 0.68, shadeBias: -0.08 },
+          { x: 0.02, y: 0.22, r: 0.54, h: 0.76, shadeBias: 0.16 },
+        ],
+      },
+      // 5. Bottom-right hero cumulus cluster
+      {
+        cx: w * 0.78,
+        cy: h * 0.765,
+        rx: w * 0.145,
+        ry: h * 0.135,
+        seed: 18.4,
+        shadow: 0.94,
+        puffs: [
+          { x: -0.52, y: 0.1, r: 0.46, h: 0.7, shadeBias: 0.22 },
+          { x: -0.14, y: -0.18, r: 0.6, h: 0.96, shadeBias: -0.08 },
+          { x: 0.24, y: -0.12, r: 0.58, h: 0.94, shadeBias: -0.14 },
+          { x: 0.5, y: 0.12, r: 0.48, h: 0.78, shadeBias: -0.1 },
+          { x: -0.12, y: 0.26, r: 0.54, h: 0.82, shadeBias: 0.26 },
+          { x: 0.22, y: 0.28, r: 0.5, h: 0.76, shadeBias: 0.12 },
+          { x: -0.78, y: -0.12, r: 0.28, h: 0.48, shadeBias: 0.18 },
+        ],
+      },
     ];
 
-    for (const c of cloudPlacements) {
-      paintCumulusCloudCluster(ctx, c.x, c.y, c.sx, c.sy, c.seed, theme === 'golden' ? 1.5 : 1.0);
+    const warmBoost = theme === 'golden' ? 1.0 : 0.0;
+    for (const c of clouds) {
+      paintSculpted3DCloud(
+        ctx,
+        w,
+        h,
+        c.cx,
+        c.cy,
+        c.rx,
+        c.ry,
+        c.seed,
+        c.puffs,
+        c.shadow,
+        warmBoost
+      );
     }
-  }
-
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.needsUpdate = true;
-  return tex;
-}
-
-/**
- * Generates a soft feathered 3D cloud puff sprite texture for floating parallax clouds around the island.
- */
-function createCloudPuffSpriteTexture(): THREE.CanvasTexture {
-  const size = 256;
-  const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext('2d');
-
-  if (ctx) {
-    ctx.clearRect(0, 0, size, size);
-    paintCumulusCloudCluster(ctx, size * 0.5, size * 0.52, size * 0.38, size * 0.28, 3.14, 1.0);
   }
 
   const tex = new THREE.CanvasTexture(canvas);
@@ -535,11 +876,32 @@ export function createDioramaRenderer(
   function getSkyTexture(theme: ThemeMode): THREE.CanvasTexture {
     const cached = skyTextureCache.get(theme);
     if (cached) return cached;
-    const tex = createCloudSkyTexture(theme);
+    const tex = createCloudSkyTexture(theme, inspectMode);
     skyTextureCache.set(theme, tex);
     return tex;
   }
-  scene.background = getSkyTexture('day');
+  const initialSkyTex = getSkyTexture('day');
+  scene.background = initialSkyTex;
+
+  // Un-tonemapped full-screen background quad so ACESFilmicToneMapping never dulls/greys the warm sky & clouds
+  const skyQuadGeom = new THREE.PlaneGeometry(2, 2);
+  const skyQuadMat = new THREE.MeshBasicMaterial({
+    map: initialSkyTex,
+    toneMapped: false,
+    depthTest: false,
+    depthWrite: false,
+  });
+  skyQuadMat.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <project_vertex>',
+      'gl_Position = vec4(position.xy, 0.9999, 1.0);'
+    );
+  };
+  const skyQuadMesh = new THREE.Mesh(skyQuadGeom, skyQuadMat);
+  skyQuadMesh.name = 'skyBackgroundQuad';
+  skyQuadMesh.frustumCulled = false;
+  skyQuadMesh.renderOrder = -1000;
+  scene.add(skyQuadMesh);
 
   // Single PerspectiveCamera — NEVER swap this instance!
   const camera = new THREE.PerspectiveCamera(FOV_2D, initWidth / initHeight, 0.1, 300);
@@ -606,33 +968,9 @@ export function createDioramaRenderer(
 
   scene.add(ambientLight, hemiLight, sunLight, rimLight, underLight);
 
-  // 3D Floating Cumulus Cloud Clusters around & below the floating island (outside worldGroup so 2D scale doesn't flatten them)
+  // Keep clouds cleanly in the high-detail background sky texture (matching Design_of_game.jpeg without cluttered 3D sprites)
   const cloudsGroup = new THREE.Group();
   cloudsGroup.name = 'cloudsGroup';
-  const cloudPuffTex = createCloudPuffSpriteTexture();
-  const cloudRingDefs: Array<{ x: number; y: number; z: number; sx: number; sy: number; opacity: number }> = [
-    { x: -3.8, y: -0.6, z: -3.2, sx: 3.4, sy: 2.1, opacity: 0.88 },
-    { x: 4.2, y: 0.4, z: -2.8, sx: 3.8, sy: 2.3, opacity: 0.92 },
-    { x: 3.5, y: -1.1, z: 3.4, sx: 3.6, sy: 2.2, opacity: 0.9 },
-    { x: -3.6, y: -1.2, z: 2.9, sx: 3.2, sy: 1.9, opacity: 0.85 },
-    { x: -1.4, y: -2.1, z: 4.5, sx: 4.0, sy: 2.4, opacity: 0.82 },
-    { x: 1.8, y: -2.0, z: -4.6, sx: 3.9, sy: 2.3, opacity: 0.84 },
-    { x: -5.2, y: 0.8, z: 0.2, sx: 3.1, sy: 1.8, opacity: 0.78 },
-    { x: 5.4, y: -0.4, z: 0.6, sx: 3.3, sy: 1.9, opacity: 0.8 },
-  ];
-  for (const cd of cloudRingDefs) {
-    const cMat = new THREE.SpriteMaterial({
-      map: cloudPuffTex,
-      transparent: true,
-      opacity: cd.opacity,
-      depthWrite: false,
-    });
-    const sp = new THREE.Sprite(cMat);
-    sp.position.set(cd.x, cd.y, cd.z);
-    sp.scale.set(cd.sx, cd.sy, 1);
-    sp.userData = { baseX: cd.x, baseY: cd.y, baseZ: cd.z };
-    cloudsGroup.add(sp);
-  }
   scene.add(cloudsGroup);
 
   // Root groups
@@ -1935,14 +2273,28 @@ export function createDioramaRenderer(
     } else if (fallbackCanvas) {
       const ctx = fallbackCanvas.getContext('2d');
       if (ctx) {
-        const skyGrad = ctx.createLinearGradient(0, 0, fallbackCanvas.width, fallbackCanvas.height);
-        skyGrad.addColorStop(0, '#83a4c6');
-        skyGrad.addColorStop(0.55, '#b8cfe4');
-        skyGrad.addColorStop(1, '#f3e6d6');
-        ctx.fillStyle = skyGrad;
-        ctx.fillRect(0, 0, fallbackCanvas.width, fallbackCanvas.height);
-        paintCumulusCloudCluster(ctx, fallbackCanvas.width * 0.22, fallbackCanvas.height * 0.25, 140, 80, 1.1);
-        paintCumulusCloudCluster(ctx, fallbackCanvas.width * 0.78, fallbackCanvas.height * 0.72, 160, 95, 2.3);
+        const skyTex = getSkyTexture(themeMode);
+        if (skyTex.image) {
+          ctx.drawImage(
+            skyTex.image as CanvasImageSource,
+            0,
+            0,
+            fallbackCanvas.width,
+            fallbackCanvas.height
+          );
+        } else {
+          const skyGrad = ctx.createLinearGradient(
+            0,
+            fallbackCanvas.height * 0.85,
+            fallbackCanvas.width,
+            fallbackCanvas.height * 0.08
+          );
+          skyGrad.addColorStop(0, '#acc7da');
+          skyGrad.addColorStop(0.5, '#c9dce7');
+          skyGrad.addColorStop(1, '#ede8df');
+          ctx.fillStyle = skyGrad;
+          ctx.fillRect(0, 0, fallbackCanvas.width, fallbackCanvas.height);
+        }
       }
     }
   }
@@ -2294,7 +2646,10 @@ export function createDioramaRenderer(
     setTheme(theme: ThemeMode) {
       themeMode = theme;
       const cfg = THEMES[theme] || THEMES.day;
-      scene.background = getSkyTexture(theme);
+      const skyTex = getSkyTexture(theme);
+      scene.background = skyTex;
+      skyQuadMat.map = skyTex;
+      skyQuadMat.needsUpdate = true;
       ambientLight.color.setHex(cfg.ambientColor);
       ambientLight.intensity = cfg.ambientIntensity;
       hemiLight.color.setHex(cfg.hemiSky);
