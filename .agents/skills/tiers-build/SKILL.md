@@ -22,10 +22,11 @@ Target: a 3-minute hackathon demo with 2-player local pass-and-play on one scree
    - **Grass Hills:** Natural green hill slopes and stepped terraces raise elevation from level 0 up to plateau level +1.
    - **Hill-Bridges:** Roads climb arches from level 0 to level +1 over rivers.
    This lets the world organically branch downwards (sunken river canyons) and upwards (terraced plateaus).
-3. **The Start Tile (`START_WATERFALL_BRIDGE`):** The first river tile is a waterfall dropping to lower elevation, spanned by an arch bridge overhead. Players can branch immediately into either **water below/above** or **road across the bridge**.
-4. **Multiple Branching & 3D Top-Point Framing:** The landscape supports multiple branching paths (river forks, road hubs, tiered cliffs). In the 3D isometric view, the diorama frames the highest elevated tile/plateau as the visual crown at the top, cascading down to the lower river terraces.
-5. **Build for inspection.** A separate feedback loop audits your output with deterministic tests and multimodal review. Expose the hooks in the "Inspector API" section exactly as specified on `window.__game`.
-6. **Do not polish.** The first build will not be pretty. Pass the gates, expose the hooks, then stop. Polish is the loop's job.
+3. **The Start Tile (`START_CITY_ROAD`):** To introduce core Carcassonne mechanics first (road building, city walling, meeple placement) on level 0, the starting tile is a classic Road & City tile: `[CITY (N), ROAD (E), GRASS (S), ROAD (W)]` at flat level 0. Elevation changes (waterfalls down to L-1, grass hills and hill-bridges up to L+1) and river systems are introduced progressively as the deck unfolds.
+4. **Elevation Progression & The Waterfall Bridge:** Later in the deck, rivers and elevation are introduced. The `WATERFALL_BRIDGE` tile features an arch bridge crossing over a waterfall drop down to `L-1`, allowing players to connect either along the road network or plunge down into the lower canyon river.
+5. **Multiple Branching & 3D Top-Point Framing:** The landscape supports multiple branching paths (river forks, road hubs, tiered cliffs). In the 3D isometric view, the diorama frames the highest elevated tile/plateau as the visual crown at the top, cascading down to the lower river terraces.
+6. **Build for inspection.** A separate feedback loop audits your output with deterministic tests and multimodal review. Expose the hooks in the "Inspector API" section exactly as specified on `window.__game`.
+7. **Do not polish.** The first build will not be pretty. Pass the gates, expose the hooks, then stop. Polish is the loop's job.
 
 ---
 
@@ -59,7 +60,7 @@ Exports `paintTile(ctx, spec, rotation, size = 256)` accepting any `CanvasRender
 2. Cities (edge band, corner merge, 3-edge block with grass notch), wall rim, blue-slate roof rows, small windows.
 3. Rivers and roads as strokes from midpoint to center: straight if opposite edges, quadratic curve through center if adjacent. Constant width, round joins, darker bank line for rivers, cobble speckle for roads.
 4. Specials:
-   - `START_WATERFALL_BRIDGE`: Vertical cliff line at center with foam spray, plunge pool below, and an arched stone bridge crossing over.
+   - `WATERFALL_BRIDGE`: Vertical cliff line at center with foam spray, plunge pool below, and an arched stone bridge crossing over.
    - `SPRING`: Bubbling mountain pool with rocky contours.
    - `LAKE`: Ellipse basin terminating river.
    - `WATERFALL`: Cliff line with foam band and mist gradient.
@@ -90,7 +91,7 @@ In `tests/tiles/sockets.test.ts`, render every unique tile at 4 rotations, class
      `neighbor.level + neighbor.edgeLevels[opposite(s)] - edgeLevels[s]`.
      All implied levels must agree, becoming the new tile's `level`.
 - **Level Changers:**
-  - **`START_WATERFALL_BRIDGE`:** North water high (0), South water low (-1), East/West road flat (0).
+  - **`WATERFALL_BRIDGE`:** An arched road bridge over a plunging waterfall: North water high (0), South water low (-1), East/West road flat (0).
   - **`WATERFALL_STRAIGHT` / `WATERFALL_BEND`:** Water drops 1 level (high = 0, low = -1). Water flows high to low.
   - **`GRASS_HILL`:** Pure grass tiles that slope or terrace upward, raising one or more edges to level +1.
   - **`BRIDGE_HILL`:** Road climbs S(0) up to N(+1) over level-0 river.
@@ -106,20 +107,20 @@ Edges & Levels format: `[N, E, S, W]`. (G=GRASS, R=ROAD, C=CITY, W=WATER).
 
 | # | ID | Edges | Levels | Description / Gameplay Role |
 |---|---|---|---|---|
-| 1 | `START_WATERFALL_BRIDGE` | W,R,W,R | 0,0,-1,0 | **Start Tile:** River N(0) falls to S(-1). Road bridge E-W at level 0. Connect road OR water! |
-| 2 | `ROAD_CURVE_A` | G,R,R,G | 0,0,0,0 | Road covers 2 adjacent edges (E-S) |
-| 3 | `RIVER_BEND_A` | W,W,G,G | 0,0,0,0 | River covers 2 adjacent edges (N-E) |
-| 4 | `CITY_CORNER_A` | C,C,G,G | 0,0,0,0 | City covers 2 adjacent edges (N-E) with wall and corner wrap |
-| 5 | `GRASS_HILL_A` | G,G,G,G | 1,0,0,0 | **Grass Hill:** Green terrain slopes upward from level 0 to level +1 on North |
-| 6 | `BRIDGE_FLAT` | R,W,R,W | 0,0,0,0 | Flat arch bridge: Road N-S over River E-W |
-| 7 | `RIVER_SPRING_HILL` | W,G,G,G | 0,0,0,0 | River spring end-cap curling from rocky hill |
+| 1 | `START_CITY_ROAD` | C,R,G,R | 0,0,0,0 | **Start Tile:** Classic Carcassonne starter at level 0. City on North, straight Road East-West, Meadow South. Introduces basic mechanics first! |
+| 2 | `ROAD_CURVE_A` | G,R,R,G | 0,0,0,0 | Road covers 2 adjacent edges (E-S), connects to starter road |
+| 3 | `CITY_CORNER_A` | C,C,G,G | 0,0,0,0 | City covers 2 adjacent edges (N-E) with wall and corner wrap, connects to starter city |
+| 4 | `GRASS_HILL_A` | G,G,G,G | 1,0,0,0 | **First Elevation (+2 pts):** Grass hill slopes upward from level 0 to Level +1 on North |
+| 5 | `WATERFALL_BRIDGE` | W,R,W,R | 0,0,-1,0 | **Waterfall & River Intro (+2 pts):** Road crosses E-W on bridge; river plunges S into sunken canyon (`L-1`)! Connect road OR water! |
+| 6 | `RIVER_STRAIGHT_LOW` | G,W,G,W | 0,0,0,0 | River continues straight in sunken canyon (`L-1`) |
+| 7 | `BRIDGE_FLAT` | R,W,R,W | 0,0,0,0 | Flat arch bridge: Road N-S over River E-W |
 | 8 | `ROAD_STRAIGHT_A` | R,G,R,G | 0,0,0,0 | Road covers 2 opposite edges (N-S) |
-| 9 | `CITY_TWO_EDGES_STRAIGHT`| C,G,C,G | 0,0,0,0 | Two city walls on N and S with grass corridor between |
-| 10 | `BRIDGE_HILL_A` | R,W,R,W | 1,0,0,0 | Road S(0) climbs to N(+1) over River E-W |
-| 11 | `RIVER_STRAIGHT_LOW` | G,W,G,W | 0,0,0,0 | River continues straight in sunken canyon (level -1) |
+| 9 | `CITY_TWO_EDGES_STRAIGHT`| C,G,C,G | 0,0,0,0 | Two parallel city walls on N and S with grass corridor between |
+| 10 | `BRIDGE_HILL_A` | R,W,R,W | 1,0,0,0 | **Hill Bridge (+2 pts):** Road climbs S(0) to N(+1) over River E-W |
+| 11 | `RIVER_BEND_A` | W,W,G,G | 0,0,0,0 | River covers 2 adjacent edges (N-E) |
 | 12 | `CITY_CORNER_B` | G,C,C,G | 0,0,0,0 | City covers 2 adjacent edges (E-S) |
 | 13 | `ROAD_BRANCH_3WAY` | G,R,R,R | 0,0,0,0 | 3-way road intersection branching East, South, West |
-| 14 | `RIVER_LAKE_LOW` | G,G,W,G | 0,0,0,0 | Lake basin end-cap terminating river in canyon |
+| 14 | `RIVER_LAKE_LOW` | G,G,W,G | 0,0,0,0 | Lake basin end-cap terminating river in canyon (`L-1`) |
 | 15 | `CLOISTER_MEADOW` | G,G,R,G | 0,0,0,0 | Monastery centered in meadow with road exiting South |
 | 16 | `WATERFALL_BEND` | W,W,G,G | 0,-1,0,0 | River N(0) plunges over cliff out East(-1) |
 | 17 | `CITY_BIG_3EDGE` | C,C,C,G | 0,0,0,0 | Large city covering 3 edges (N, E, S) with grass notch on W |
