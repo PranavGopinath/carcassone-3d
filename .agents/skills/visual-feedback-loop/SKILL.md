@@ -35,6 +35,9 @@ The loop runs with **no human in it**. Implement the whole spec; where something
 8. **Never trust model-invented IDs as keys.** Defect IDs are assigned by code when verdicts are merged: `<judge>-<itemId>-<n>` (e.g. `still-M2-1`).
 9. **Every view, every iteration.** Each iteration captures and judges every view in `views` (e.g. `2d` and `3d`): the gameplay scripts in each view, and at least one canvas shot and one page shot per view. An item with `views` is judged separately in each view and passes only if it passes in all of them. Never skip a view to save time or budget.
 10. **Gameplay is graded, not just the cinematic.** The loop drives real game actions and real UI clicks through scripted timelines (§1.6). A render that looks right in a fixed camera flight but breaks when a tile is placed, a score changes or the view is toggled has not passed.
+11. **Scope: the board, in both views.** The loop improves the 3D board (terrain, slab, water, buildings, props, meeples, lighting and materials on them) and its 2D counterpart. Everything listed in the config's `outOfScope` (e.g. the page or scene background, sky, HUD styling) belongs to someone else: judges ignore it and the patcher is told not to change it. Enforce it two ways: a diff touching `outOfScopePaths` is rejected like a protected-path violation, and every pairwise call also asks whether anything out of scope changed between the two renders; a confirmed (both orders) out-of-scope change makes the iteration worse.
+12. **The 2D and 3D views show the same game.** Every tile, feature and object visible in one view must exist, in the same place, in the other: a house drawn on a 2D tile must stand on that tile in 3D, and nothing may appear in 3D that the 2D tile doesn't show. The tile spec and game state are the source of truth: when the views disagree, fix whichever view departs from the spec, and if both do, fix both.
+13. **Realism is the style target.** The board should read as a photographed physical miniature like `diorama-style-ref.png`: real materials with surface variation, soft natural light and shadow, believable scale and density. Flat colors, untextured primitives and low-poly game art are fidelity gaps, not acceptable style choices.
 
 ## Files
 
@@ -85,6 +88,10 @@ Both judges use `gemini-4-argon` and the `judge_a`/`judge_b` roles. They can't w
 - **judge_a (motion):** one call per motion clip: the cinematic's `timeline.motionSegments` (clipped from `flight.webm` with `start_offset`/`end_offset`) and every gameplay video (`play-<scriptId>-<view>.webm`). Upload via the Files API and poll until `ACTIVE`. Use **static** processing, set `fps` near the capture rate, `media_resolution` high. With each clip send its step list as `MM:SS` labels ("00:02 bot places a tile", "00:05 click rotate"), so the judge knows what should happen when, and a labelled filmstrip of the frames around each `frameDiff` spike. Grade only the motion items for that segment and view.
 - **judge_b (stills):** one call per shot group and view. Send the shot plus a high-resolution crop for each `crop` item. Turn audit findings into **numbered marks drawn on the image**, not raw JSON. Send each item's `references`. For gameplay items with `at: "after-step"`, send the settled full-page frame after each step, labelled with the step.
 
+### Cross-view consistency items
+
+An item with `pairViews: true` is judged on matching 2D and 3D images side by side: for a shot item, the shots in its `shots` list (e.g. `board-2d` with `terrace-overview`); for a gameplay item, the settled 2D and 3D frames after each step of its script. Draw the same numbered tile marks (from the audit's `tileLabels`, the screen position of each tile in each image) on both images so the judge can match tiles. The judge lists, per tile mark, every object or feature present in one view and missing, moved or different in the other; each mismatch is a defect naming the tile, both views, and which view departs from the tile spec.
+
 ### Views
 
 An item with `views` is resolved once per view; its stored result is `{ view: verdict }` and it passes only if every view passes. Each defect carries its `view`, and so does its ID (`motion-G1-3d-1`). A gameplay item's `segment` names a script; for `perView` scripts it is judged on that script's capture in each listed view. A `{view}` in an item's `shot` expands per view (`ui-{view}` → `ui-2d`, `ui-3d`).
@@ -101,7 +108,7 @@ A separate call compares the best-so-far with the current iteration. Run it on *
 
 ### Golden set (real, before the first live run)
 
-The golden set measures whether the **vision judges** catch things, so hard checks are hidden from the judges for these cases.
+The golden set measures whether the **vision judges** catch things, so hard checks are hidden from the judges for these cases. Include a cross-view case: remove one building or feature from one view only and confirm the consistency items catch it.
 1. **Injected defects.** Use the `injectDefect` hook (if the project has one) and capture-side perturbations (blank a frame, offset one mesh for one frame, duplicate a frame) to produce real broken captures: a floating prop, a blank morph frame, a hovering meeple, a frame of flicker, a pop-in, and in gameplay a tile placed with no drop animation and a HUD score that doesn't update after a completion. Run judge_a/judge_b on them, in both views.
 2. **Fidelity calibration.** Grade each reference image as if it were the render (it must pass with no high gaps), and grade iteration 0's untouched draft (it must not pass if it visibly differs). A fidelity judge that passes both or fails both is broken; fix the prompt before running live.
 3. Record per-case results, recall, false positives and the real `interactionId` of every judge call in `runs/loop/golden.json`. A judge may fail a defect item without a hard check only for defect types it caught here.
@@ -164,6 +171,8 @@ Use a fake scene, `tests/fixtures/loop-scene.html`: a cube with the hooks.
 6. A worse or tied iteration resets to the best commit; a plateau triggers escalation; a failed escalation stops the loop; nothing reads stdin.
 7. Gameplay steps fire before the first frame at or after their `at`; a `click` on the fake scene's button changes state; a step that throws records a `stepErrors` failure.
 8. An item with `views: ["2d","3d"]` that passes in 2D and fails in 3D fails overall, and a change that fixes 3D but breaks 2D counts as worse.
+10. A `pairViews` item receives matching 2D and 3D images with the same tile marks; an object present in only one view of the fake scene produces a defect naming that tile.
+11. A patch touching `outOfScopePaths` is rejected, and a pairwise verdict of an out-of-scope change makes the iteration worse.
 9. A fake-scene object that appears in one frame during a gameplay step trips `frameDiff`; the same object tweened over 5 frames does not.
 
 ## Definition of done
