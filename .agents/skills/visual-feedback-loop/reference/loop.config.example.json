@@ -1,6 +1,6 @@
 {
   "_fieldNotes": {
-    "hooks": "Names of functions on window[global]. null = optional. ready: resolves when textures are loaded; if null, wait for document.fonts.ready plus one renderAt(0). injectDefect(name): optional, lets the golden set break the real scene (e.g. 'floating-prop', 'hovering-meeple', 'pop-in'). Gameplay hooks: playAt(t) renders live play at play-clock time t with every tween (tile drop, meeple drop, highlights, score popups, view morph) driven by t; botMove() lets the deterministic bot choose and apply its next move including a meeple, animated on the play clock; showLegalMoves(on) toggles placement highlights; setView(mode, instant?) switches view. loadFixture('fixture-midgame') must give a board where the scripted bot moves complete at least one road and one city.",
+    "hooks": "Names of functions on window[global]. null = optional. ready: resolves when textures are loaded; if null, wait for document.fonts.ready plus one renderAt(0). injectDefect(name): optional, lets the golden set break the real scene (e.g. 'floating-prop', 'hovering-meeple', 'pop-in'). Gameplay hooks: playAt(t) renders live play at play-clock time t with every tween (tile drop, meeple drop, highlights, score popups, view morph) driven by t; botMove() lets the deterministic bot choose and apply its next move including a meeple, animated on the play clock; showLegalMoves(on) toggles placement highlights; setView(mode, instant?) switches view. loadFixture(name) must throw on unknown names; 'fixture-midgame' must leave at least 4 tiles in the deck and let the scripted bot moves complete at least one feature. audit() must also return marks.<name> (screen positions [{shot,x,y,label}] for floatingProps, ungroundedMeeples and tileLabels) and viewConsistency (per tile, the features and objects drawn in 2D vs present in 3D, with mismatches).",
     "timeUnit": "'s' or 'ms': the unit renderAt expects.",
     "frameDiff": "Spike = per-cell (grid x grid) or second-order changed-pixel fraction > spikeFactor x its segment median.",
     "shots": "Canvas-clipped shots from captureShot.",
@@ -9,12 +9,16 @@
     "protectedPaths": "The patcher may edit anything else in the worktree, except baseline tests (files under tests/ tracked at the run's start commit).",
     "regressionTestDir": "Where the patcher adds new tests. These run in acceptance but never count as passing a rubric item.",
     "patcher": "Tool-call and wall-clock caps per iteration; escalatedMaxToolCalls applies to the iteration after a lead_architect escalation.",
-    "limits": "plateauIterations: non-improving iterations in a row before escalating to lead_architect. budgetUsd is the real cap.",
+    "limits": "plateauIterations: non-improving iterations in a row before escalating to lead_architect. budgetUsd is a safety net set well above a full run's cost; maxIterations normally ends the run.",
     "timeline.motionSegments": "Cinematic segments sent to judge_a as clipped videos. Gameplay videos are always sent too.",
     "views": "Every view the game has. Each iteration captures and judges all of them (hard rule 9).",
-    "gameplay": "Scripted play, captured full-page at fps on the play clock. Steps: {at, call, args} invokes a hook; {at, click} is a real Playwright click on a selector. perView scripts run once per view; others once from startView. label is shown to judges as the expected event."
+    "gameplay": "Scripted play, captured full-page at fps on the play clock. Steps: {at, call, args} invokes a hook; {at, click} is a real Playwright click on a selector. perView scripts run once per view; others once from startView. label is shown to judges as the expected event. expect: JS expression over before/after (step) or start/end (script) getState() snapshots; false is a stepErrors failure. Steps that change neither state nor frame are also stepErrors.",
+    "outOfScope": "Areas owned by someone else. Judges ignore them; patches that change them are rejected (hard rule 11).",
+    "outOfScopePaths": "Files that implement out-of-scope areas. Diffs touching them are rejected.",
+    "baseBranch": "Branch the loop starts from and merges its best iteration back into (locally, never pushed)."
   },
   "name": "tiers",
+  "baseBranch": "main",
   "devCommand": "npm run dev -- --port 5173 --strictPort",
   "url": "http://localhost:5173/?inspect=1&seed=7&w=1280&h=720",
   "viewport": { "width": 1280, "height": 720, "deviceScaleFactor": 1 },
@@ -57,11 +61,7 @@
     "underside-slab"
   ],
   "pageShots": [{ "id": "ui-2d", "view": "2d", "t": 1.5 }, { "id": "ui-3d", "view": "3d", "t": 7 }],
-  "references": [
-    "public/reference/diorama-style-ref.png",
-    "public/reference/carcassonne-layout.jpg",
-    "public/reference/ui-layout-ref.jpg"
-  ],
+  "references": ["public/reference/diorama-style-ref.png", "public/reference/carcassonne-layout.jpg"],
   "rubric": "rubric/visual.json",
   "protectedPaths": [
     "rubric/",
@@ -77,7 +77,7 @@
   "acceptance": ["npm run build", "npm test"],
   "model": { "name": "gemini-4-argon", "thinking": "high", "mediaResolution": "high" },
   "patcher": { "maxToolCalls": 60, "escalatedMaxToolCalls": 120, "deadlineMs": 1200000 },
-  "limits": { "maxIterations": 10, "budgetUsd": 25, "plateauIterations": 2 },
+  "limits": { "maxIterations": 10, "budgetUsd": 200, "plateauIterations": 2 },
   "views": ["2d", "3d"],
   "gameplay": {
     "fps": 12,
@@ -88,14 +88,26 @@
         "perView": true,
         "duration": 10,
         "steps": [
-          { "at": 0.0, "call": "loadFixture", "args": ["fixture-midgame"], "label": "load mid-game board" },
+          {
+            "at": 0.0,
+            "call": "loadFixture",
+            "args": ["fixture-midgame"],
+            "label": "load mid-game board",
+            "expect": "Object.keys(after.board).length > 1 && after.currentTile !== null"
+          },
           { "at": 0.6, "click": "[data-testid=rotate-tile]", "label": "click rotate" },
           { "at": 1.2, "call": "showLegalMoves", "args": [true], "label": "show legal placements" },
-          { "at": 2.0, "call": "botMove", "label": "bot places tile + meeple" },
-          { "at": 4.0, "call": "botMove", "label": "bot completes a feature" },
-          { "at": 6.0, "call": "botMove", "label": "bot places tile" },
-          { "at": 8.0, "call": "botMove", "label": "bot completes a feature" }
-        ]
+          {
+            "at": 2.0,
+            "call": "botMove",
+            "label": "bot places tile + meeple",
+            "expect": "after.turnNumber > before.turnNumber"
+          },
+          { "at": 4.0, "call": "botMove", "label": "bot places tile", "expect": "after.turnNumber > before.turnNumber" },
+          { "at": 6.0, "call": "botMove", "label": "bot places tile", "expect": "after.turnNumber > before.turnNumber" },
+          { "at": 8.0, "call": "botMove", "label": "bot places tile", "expect": "after.turnNumber > before.turnNumber" }
+        ],
+        "expect": "end.completedChains > start.completedChains"
       },
       {
         "id": "toggle",
@@ -108,5 +120,9 @@
         ]
       }
     ]
-  }
+  },
+  "outOfScope": [
+    "The HUD (everything in src/ui/): layout, styling, text, buttons and behavior. Exception: the current-tile preview's art comes from the shared tile painter (src/tiles/painter.ts), which is in scope"
+  ],
+  "outOfScopePaths": ["src/ui/"]
 }
