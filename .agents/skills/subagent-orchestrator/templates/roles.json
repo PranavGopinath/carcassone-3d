@@ -1,0 +1,95 @@
+{
+  "roles": [
+    {
+      "name": "lead_architect",
+      "model": "gemini-4-argon",
+      "thinking": "high",
+      "ownsPaths": ["src/contracts.ts", "docs/", "AGENTS.md", "package.json", "tsconfig.json"],
+      "neverTouches": ["src/logic/", "src/render/", "src/ui/", "src/tiles/"]
+    },
+    {
+      "name": "tile_designer",
+      "model": "gemini-4-argon",
+      "thinking": "high",
+      "ownsPaths": ["docs/DESIGN.md"],
+      "neverTouches": ["src/", "tests/"]
+    },
+    {
+      "name": "logic_engineer",
+      "model": "gemini-4-argon",
+      "thinking": "high",
+      "ownsPaths": ["src/logic/", "tests/logic/"],
+      "neverTouches": ["three"]
+    },
+    {
+      "name": "tile_engineer",
+      "model": "gemini-4-argon",
+      "thinking": "high",
+      "ownsPaths": ["src/tiles/painter.ts", "src/tiles/probe.ts", "tests/tiles/"],
+      "neverTouches": ["src/render/"]
+    },
+    {
+      "name": "tile_family_worker",
+      "model": "gemini-3.8-flash",
+      "thinking": "medium",
+      "ownsPaths": ["src/tiles/families/"],
+      "neverTouches": ["src/logic/", "src/render/"]
+    },
+    {
+      "name": "render_engineer",
+      "model": "gemini-4-argon",
+      "thinking": "high",
+      "ownsPaths": ["src/render/"],
+      "neverTouches": ["src/ui/", "src/logic/"]
+    },
+    {
+      "name": "ui_engineer",
+      "model": "gemini-3.8-flash",
+      "thinking": "medium",
+      "ownsPaths": ["src/ui/"],
+      "neverTouches": ["src/render/", "src/logic/"]
+    },
+    {
+      "name": "boilerplate_worker",
+      "model": "gemini-3.8-flash",
+      "thinking": "low",
+      "ownsPaths": ["README.md", "docs/"],
+      "neverTouches": ["src/"]
+    },
+    {
+      "name": "judge_a",
+      "model": "gemini-4-argon",
+      "thinking": "high",
+      "ownsPaths": [],
+      "neverTouches": ["*"]
+    },
+    {
+      "name": "judge_b",
+      "model": "gemini-4-argon",
+      "thinking": "high",
+      "ownsPaths": [],
+      "neverTouches": ["*"]
+    },
+    {
+      "name": "patcher",
+      "model": "gemini-4-argon",
+      "thinking": "high",
+      "ownsPaths": [],
+      "neverTouches": ["tests/", "rubric/", "scripts/gates/"]
+    },
+    {
+      "name": "router",
+      "model": "gemini-3.5-flash-lite",
+      "thinking": "low",
+      "ownsPaths": [],
+      "neverTouches": ["*"]
+    },
+    {
+      "name": "historian",
+      "model": "gemini-3.8-flash",
+      "thinking": "low",
+      "ownsPaths": ["runs/ledger.json", "AGENTS.md", "docs/architecture.html"],
+      "neverTouches": ["src/"]
+    }
+  ]
+}
