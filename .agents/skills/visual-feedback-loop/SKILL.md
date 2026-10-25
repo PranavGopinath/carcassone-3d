@@ -67,7 +67,7 @@ On startup:
    - `stepErrors`: any console error or exception during a gameplay step.
 8. Stitch frames with ffmpeg (`@ffmpeg-installer/ffmpeg` if there is no system ffmpeg). If stitching fails, continue with stills.
 9. Two captures of the same commit must match within a small per-pixel tolerance.
-10. Export `captureShot(workDir, shotId | {t} | {script, view, t})` as a cheap single-image path. The patcher's `preview` tool uses it (§3).
+10. Export `captureShot(workDir, shotId | {t} | {script, view, t})` as a cheap single-image path. Page shots and gameplay frames come back **full-page**, exactly as the judges see them, so HUD changes can be previewed. The patcher's `preview` tool uses it (§3).
 
 ## 2. Judges: `judge.mjs`
 
@@ -97,7 +97,7 @@ An item with `views` is resolved once per view; its stored result is `{ view: ve
 
 ### Pairwise
 
-A separate call compares the best-so-far with the current iteration. Run it on **every shot touched by this iteration's defects plus every fidelity shot**, in every view they apply to, not a single global shot. Randomize which is A or B, ask in **both orders**, and count a winner only if it wins both times; otherwise it's a tie.
+A separate call compares the best-so-far with the current iteration. Run it on **every shot touched by this iteration's defects plus every fidelity shot**, in every view they apply to, not a single global shot. Ask per item, never "which is better?" in general: for a `fidelity` item, send the item's `references` too and ask which render is **closer to the reference** for that item's `aspect`; for a `defect` item, ask which shows less of that defect. Randomize which is A or B, ask in **both orders**, and count a winner only if it wins both times; otherwise it's a tie.
 
 ### Golden set (real, before the first live run)
 
@@ -115,7 +115,7 @@ The patcher is a **tool-using agent working inside the run's worktree**, not a s
    - `list_files(dir)`, `read_file(path, startLine?, endLine?)` (returns numbered lines), `search(pattern, dir?)`
    - `write_file(path, content)`, `edit_file(path, search, replace)` (search must match exactly once; on 0 or 2+ matches return the matching line numbers)
    - `run(command)`: only the configured `acceptance` commands and `npx vitest run <path>`; returns exit code and the log tail
-   - `preview(shotId | t | {script, view, t})`: builds and returns the current render of that shot, cinematic frame or gameplay frame (running the script's steps up to `t`) as an image, so the patcher can see its change before the full capture
+   - `preview(shotId | t | {script, view, t})`: builds and returns the current render of that shot, page shot (full page, HUD included), cinematic frame or gameplay frame (running the script's steps up to `t`) as an image, so the patcher can see its change before the full capture. For fidelity defects it returns the item's reference beside the render.
    - `run_script(script, view)`: plays one gameplay script headlessly and returns its step errors, per-step audit and a filmstrip, for gameplay defects
    - `finish(report)`: ends the turn with a report per `schemas/patch-report.schema.json`
 3. **Context at the start of each iteration (fresh conversation):**
