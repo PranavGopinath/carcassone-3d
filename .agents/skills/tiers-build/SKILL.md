@@ -136,17 +136,24 @@ Edges & Levels format: `[N, E, S, W]`. (G=GRASS, R=ROAD, C=CITY, W=WATER).
 - 2 players (Player 1: Deep Blue, Player 2: Terracotta/Amber), 3 meeples each.
 - **Turn sequence:** View drawn tile in dock -> Rotate (`R` or button) -> Click glowing legal ghost spot (shows implied level badge `L-1`, `L0`, `L+1`) -> Optionally place 1 meeple on City, Road, or River feature -> Turn passes with banner.
 - A meeple cannot be placed on a feature whose connected chain already holds a meeple.
-- **Completion:**
-  - City complete when no open CITY edges remain.
-  - Road complete when both ends terminate (hut, junction, or city gate).
-  - River complete when both ends capped by SPRING or LAKE.
-  - Completed chains score immediately and return meeples.
-- **Scoring:**
-  - CITY: 2 pts / tile.
-  - ROAD: 1 pt / tile + 3 per bridge tile in chain.
-  - RIVER: 2 pts / tile + 3 per waterfall tile in chain.
-  - Ownership: Player with most meeples takes all points; ties give full points to both.
-  - End game (after 20th tile): Incomplete chains with meeples score 1 pt / tile. Grass never scores (no farmers).
+- **Immediate Elevation Change Bonus:**
+  - Whenever a placed tile changes elevation (e.g., waterfall drop to `L-1`, grass hill rise to `L+1`, or hill-bridge climb to `L+1`), the active player immediately scores **+2 points**!
+- **Completion Rules:**
+  - **City:** Complete when no open CITY edges remain.
+  - **Road:** Complete when both ends terminate (hut, junction, or city gate) or forms a closed loop.
+  - **River:** Complete when both ends are capped by SPRING or LAKE (or forms a loop).
+  - Completed chains score immediately and return meeples to players' reserves.
+- **Completed Chain Scoring:**
+  - **ROAD:** **+1 point** for every connected tile in the completed road (+3 bonus per bridge tile in the chain).
+  - **CITY:** **+2 points** per tile in the completed city.
+  - **RIVER (WATER):** **+2 points** per tile in the completed river (+3 bonus per waterfall tile in the chain).
+  - **Ownership:** The player with the most meeples on the chain takes all points; on a tie, all tied players get full points.
+- **End-Game Incomplete Scoring (after 20th tile):**
+  - Any feature with a meeple that remains unconnected / incomplete at the end scores **half the points they would have been**:
+    - **Incomplete City:** **1 pt per tile** (half of 2 pts/tile).
+    - **Incomplete River:** **1 pt per tile** (half of 2 pts/tile).
+    - **Incomplete Road:** **0.5 pts per tile** (half of 1 pt/tile, calculated as `Math.floor(tiles / 2)` or 0.5 per tile).
+    - Grass never scores (no farmers).
 
 ---
 
