@@ -781,6 +781,62 @@ export async function uploadMediaFile(filePath, mimeType = 'video/webm', pollTim
  * returns the `function_result` (plus any media attachments), and repeats until the model calls
  * `finish` or `maxToolCalls` / `deadlineMs` is reached. Every turn is traced and metered.
  */
+function capToolResult(result, maxChars) {
+  if (!result || typeof result !== 'object') return result;
+  if (JSON.stringify(result).length <= maxChars) return result;
+  const capped = { ...result, truncated: true };
+  // Logs keep their tail (where errors are); everything else keeps its head.
+  const tailKeys = new Set(['output', 'log', 'stdout', 'stderr', 'error']);
+  const stringKeys = Object.keys(capped)
+    .filter((k) => typeof capped[k] === 'string')
+    .sort((a, b) => capped[b].length - capped[a].length);
+  for (const k of stringKeys) {
+    if (JSON.stringify(capped).length <= maxChars) break;
+    const keep = Math.max(500, capped[k].length - (JSON.stringify(capped).length - maxChars) - 100);
+    capped[k] = tailKeys.has(k) ? `…${capped[k].slice(-keep)}` : `${capped[k].slice(0, keep)}…`;
+  }
+  if (JSON.stringify(capped).length <= maxChars) return capped;
+  return { ok: result.ok, truncated: true, preview: JSON.stringify(result).slice(0, maxChars) };
+}
+
+function summarizeToolCall(entry) {
+  const args = JSON.stringify(entry.arguments || {}).slice(0, 100);
+  const r = entry.result || {};
+  let outcome;
+  if (r.ok === false) outcome = `error: ${String(r.error || '').slice(0, 100)}`;
+  else if (entry.name === 'read_file') outcome = `lines ${r.startLine}-${r.endLine} of ${r.totalLines}`;
+  else if (entry.name === 'search') outcome = `${(r.matches || []).length} matches`;
+  else if (entry.name === 'run') outcome = `exit ${r.exitCode ?? r.code ?? '?'}`;
+  else outcome = 'ok';
+  return `${entry.name}(${args}) -> ${outcome}`;
+}
+
+function buildRolloverInput({ input, history, latestInputs, toolCallsUsed, maxToolCalls }) {
+  const taskParts = Array.isArray(input) ? input : [{ type: 'text', text: String(input) }];
+  const changed = [
+    ...new Set(
+      history
+        .filter((h) => ['write_file', 'edit_file'].includes(h.name) && h.result?.ok !== false)
+        .map((h) => h.arguments?.path)
+        .filter(Boolean)
+    ),
+  ];
+  const progress = [
+    'CONTEXT RESET: your earlier conversation was dropped to save quota. The original task is above; your progress so far is below.',
+    `Tool calls used: ${toolCallsUsed} of ${maxToolCalls}.`,
+    `Files you have changed (already saved in the worktree): ${changed.length ? changed.join(', ') : 'none yet'}.`,
+    'Every tool call so far, oldest first:',
+    ...history.map((h, i) => `${i + 1}. ${summarizeToolCall(h)}`),
+    'File contents you read earlier are no longer in context; re-read only the line ranges you need. The results of your most recent calls follow.',
+  ].join('\n');
+  const latest = latestInputs.map((part) =>
+    part.type === 'function_result'
+      ? { type: 'text', text: `[Result of ${part.name}]: ${JSON.stringify(part.result)}` }
+      : part
+  );
+  return [...taskParts, { type: 'text', text: progress }, ...latest];
+}
+
 export async function runToolLoop({
   role = 'patcher',
   model = 'gemini-4-argon',
@@ -802,6 +858,8 @@ export async function runToolLoop({
   fakeToolTurns = undefined,
   fakeHandler = undefined,
   interactionsClient = undefined,
+  contextTokenBudget = 60_000,
+  maxToolResultChars = 8_000,
 }) {
   const spendState = ensurePersistentSpendState(state, tracePath);
   const startMs = Date.now();
@@ -823,6 +881,7 @@ export async function runToolLoop({
   let finished = false;
   let finishReport = null;
   const history = [];
+  let rollovers = 0;
 
   while (!finished && toolCallsUsed < maxToolCalls && Date.now() < loopDeadline) {
     const remainingMs = loopDeadline - Date.now();
@@ -936,6 +995,7 @@ export async function runToolLoop({
         const { __mediaParts, mediaParts: _mp, ...rest } = rawResult;
         cleanResult = rest;
       }
+      cleanResult = capToolResult(cleanResult, maxToolResultChars);
 
       history.push({
         id: callId,
@@ -966,6 +1026,18 @@ export async function runToolLoop({
     }
 
     currentInput = nextTurnInputs;
+
+    // Every turn re-sends the whole server-side conversation, so once it passes the budget,
+    // start a fresh interaction holding the task, a one-line log of past calls and only the
+    // latest results.
+    if (!finished && Number(callRes.inputTokens) > contextTokenBudget) {
+      rollovers += 1;
+      if (process.env.ORCH_FAKE !== '1') {
+        console.error(`  [tool:${taskId}] context ${callRes.inputTokens} tokens > ${contextTokenBudget}; rolling over (#${rollovers})`);
+      }
+      currentInput = buildRolloverInput({ input, history, latestInputs: nextTurnInputs, toolCallsUsed, maxToolCalls });
+      prevId = undefined;
+    }
   }
 
   return {
@@ -977,6 +1049,7 @@ export async function runToolLoop({
     },
     toolCallsUsed,
     turns: turnIndex,
+    rollovers,
     history,
     lastInteractionId: prevId,
     state: spendState,

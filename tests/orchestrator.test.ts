@@ -409,4 +409,48 @@ describe('Subagent Orchestrator (Prompt 0 & Prompt 2 §0 Upgrades)', () => {
     expect(traceLines[1].previousInteractionId).toBe(traceLines[0].interactionId);
     expect(traceLines[2].previousInteractionId).toBe(traceLines[1].interactionId);
   });
+  it('caps large tool results and rolls the conversation over once a turn passes contextTokenBudget', async () => {
+    const tracePath = path.join(tmpDir, 'runs/orchestrator/trace.jsonl');
+    const seen: any[] = [];
+    let turn = 0;
+    const fakeHandler = async ({ input, previousInteractionId }: any) => {
+      seen.push({ input, previousInteractionId });
+      turn += 1;
+      const functionCalls =
+        turn < 3
+          ? [{ id: `c${turn}`, name: 'read_file', arguments: { path: 'src/big.ts' } }]
+          : [{ id: 'f', name: 'finish', arguments: { report: { summary: 'done', addressed: [] } } }];
+      return { interactionId: `i${turn}`, inputTokens: turn === 1 ? 70_000 : 1_000, outputTokens: 10, functionCalls };
+    };
+
+    const res = await runToolLoop({
+      tools: [
+        {
+          name: 'read_file',
+          handler: async () => ({ ok: true, startLine: 1, endLine: 150, totalLines: 2000, content: 'x'.repeat(20_000) }),
+        },
+        { name: 'finish', handler: async (a: any) => ({ ok: true, report: a.report }) },
+      ],
+      input: [{ type: 'text', text: 'TASK: fix the bridge camera' }],
+      taskId: 'rollover_test',
+      rootDir: tmpDir,
+      tracePath,
+      fakeHandler,
+      contextTokenBudget: 60_000,
+      maxToolResultChars: 8_000,
+    });
+
+    expect(res.finished).toBe(true);
+    expect(res.rollovers).toBe(1);
+    // Turn 2 starts a fresh interaction carrying the task, the call log and the latest result as text.
+    expect(seen[1].previousInteractionId).toBeUndefined();
+    const texts = seen[1].input.map((p: any) => p.text || '');
+    expect(texts.join('\n')).toContain('TASK: fix the bridge camera');
+    expect(texts.join('\n')).toContain('CONTEXT RESET');
+    expect(texts.join('\n')).toContain('read_file({"path":"src/big.ts"}) -> lines 1-150 of 2000');
+    const latest = texts.find((t: string) => t.startsWith('[Result of read_file]'));
+    expect(latest.length).toBeLessThan(8_200);
+    // Under budget again, so turn 3 continues the new interaction.
+    expect(seen[2].previousInteractionId).toBe('i2');
+  });
 });

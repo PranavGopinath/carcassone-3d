@@ -199,6 +199,7 @@ export function buildSrcOutline(workDir) {
  * Creates the tool definitions and handlers for the patcher's `runToolLoop` (§3.2).
  */
 export function createPatcherTools(workDir, config, baselineTestFiles = new Set(), options = {}) {
+  const maxReadLines = Number(config.patcher?.maxReadLines) || 150;
   const resolveReadPath = (relPath) => {
     if (typeof relPath !== 'string' || !relPath.trim()) {
       throw new Error('Empty path');
@@ -243,12 +244,15 @@ export function createPatcherTools(workDir, config, baselineTestFiles = new Set(
         } else {
           results.push(path.relative(workDir, resolved).replace(/\\/g, '/'));
         }
-        return { ok: true, files: results };
+        const maxFiles = 200;
+        return results.length > maxFiles
+          ? { ok: true, files: results.slice(0, maxFiles), totalFiles: results.length, truncated: true, hint: 'Narrow dir to see the rest.' }
+          : { ok: true, files: results };
       },
     },
     {
       name: 'read_file',
-      description: 'Read numbered lines from a file inside the worktree.',
+      description: `Read numbered lines from a file inside the worktree, at most ${maxReadLines} lines per call. Use search to find line numbers, then read just that range.`,
       parameters: {
         type: 'object',
         required: ['path'],
@@ -265,7 +269,8 @@ export function createPatcherTools(workDir, config, baselineTestFiles = new Set(
         }
         const lines = fs.readFileSync(resolved, 'utf8').split('\n');
         const start = Math.max(1, Number(startLine || 1));
-        const end = Math.min(lines.length, Number(endLine || Math.min(lines.length, start + 350)));
+        const requestedEnd = Math.min(lines.length, Number(endLine || lines.length));
+        const end = Math.min(requestedEnd, start + maxReadLines - 1);
         const numbered = lines
           .slice(start - 1, end)
           .map((line, i) => `${start + i}: ${line}`)
@@ -277,6 +282,7 @@ export function createPatcherTools(workDir, config, baselineTestFiles = new Set(
           startLine: start,
           endLine: end,
           content: numbered,
+          ...(end < requestedEnd ? { truncated: true, hint: `Capped at ${maxReadLines} lines; read from line ${end + 1} for more.` } : {}),
         };
       },
     },
@@ -314,8 +320,8 @@ export function createPatcherTools(workDir, config, baselineTestFiles = new Set(
               const lines = fs.readFileSync(full, 'utf8').split('\n');
               for (let i = 0; i < lines.length; i++) {
                 if (regex.test(lines[i])) {
-                  matches.push({ file: rel, line: i + 1, text: lines[i].slice(0, 200) });
-                  if (matches.length >= 80) return;
+                  matches.push({ file: rel, line: i + 1, text: lines[i].slice(0, 160) });
+                  if (matches.length >= 40) return;
                 }
               }
             }
@@ -324,7 +330,9 @@ export function createPatcherTools(workDir, config, baselineTestFiles = new Set(
         if (fs.statSync(resolved).isDirectory()) {
           walk(resolved);
         }
-        return { ok: true, matches };
+        return matches.length >= 40
+          ? { ok: true, matches, truncated: true, hint: 'Showing the first 40 matches; narrow the pattern or dir.' }
+          : { ok: true, matches };
       },
     },
     {
@@ -469,9 +477,11 @@ export function createPatcherTools(workDir, config, baselineTestFiles = new Set(
           script: { type: 'string' },
           view: { type: 'string' },
           reference: { type: 'string' },
+          resolution: { type: 'string', enum: ['medium', 'high'], description: 'Image detail; default medium. Use high only to inspect small details.' },
         },
       },
       handler: async (args = {}) => {
+        const previewResolution = args.resolution === 'high' ? 'high' : 'medium';
         const target = args.script
           ? { script: args.script, view: args.view || '2d', t: args.t ?? 2.0 }
           : typeof args.t === 'number' && !args.shotId
@@ -495,8 +505,8 @@ export function createPatcherTools(workDir, config, baselineTestFiles = new Set(
             type: 'image',
             data: b64,
             mime_type: 'image/png',
-            media_resolution: 'high',
-            resolution: 'high',
+            media_resolution: previewResolution,
+            resolution: previewResolution,
           });
         }
 
@@ -516,8 +526,8 @@ export function createPatcherTools(workDir, config, baselineTestFiles = new Set(
               type: 'image',
               data: fs.readFileSync(refAbs).toString('base64'),
               mime_type: 'image/png',
-              media_resolution: 'high',
-              resolution: 'high',
+              media_resolution: previewResolution,
+              resolution: previewResolution,
             });
           }
         }
@@ -806,6 +816,7 @@ export async function runPatcherIteration({
     budgetUsd: options.budgetUsd,
     fakeToolTurns: options.fakeToolTurns,
     fakeHandler: options.fakePatcherHandler,
+    contextTokenBudget: config.patcher?.contextTokenBudget,
   });
 
   // Gate 1: Hard Rule 1 & Hard Rule 11 diff check against startCommit
@@ -843,6 +854,7 @@ export async function runPatcherIteration({
       budgetUsd: options.budgetUsd,
       fakeToolTurns: options.fakeRepairToolTurns,
       fakeHandler: options.fakeRepairHandler || options.fakePatcherHandler,
+      contextTokenBudget: config.patcher?.contextTokenBudget,
     });
     loopRes = repairRes;
 
