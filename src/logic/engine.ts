@@ -13,7 +13,6 @@ export function newGame(): GameState {
     current: 0,
     turn: 1,
     deckIndex: 1,
-    phase: 'place',
     log: [],
   };
 }

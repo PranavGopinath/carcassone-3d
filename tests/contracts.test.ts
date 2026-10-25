@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import fixture from '../fixtures/demo-board.json';
 import { DECK, getTile } from '../src/contracts/deck';
-import { DIR_OFFSETS, edgesMatch, rotatedHeights } from '../src/contracts/tiles';
-import type { Dir, FeatureKind, GameState, Placement } from '../src/contracts/types';
-
-const EDGE_FOR: Record<FeatureKind, string> = { CITY: 'CITY', ROAD: 'ROAD', RIVER: 'WATER' };
+import { DIRS, DIR_OFFSETS, FEATURE_SIDE, edgesMatch, rotatedHeights } from '../src/contracts/tiles';
+import type { GameState } from '../src/contracts/types';
 
 describe('deck', () => {
   it('has 20 uniquely-identified tiles', () => {
@@ -17,7 +15,7 @@ describe('deck', () => {
       const covered = new Set<number>();
       for (const f of tile.features) {
         for (const d of f.sides) {
-          expect(tile.sides[d], `${tile.id}.${f.id}`).toBe(EDGE_FOR[f.kind]);
+          expect(tile.sides[d], `${tile.id}.${f.id}`).toBe(FEATURE_SIDE[f.kind]);
           covered.add(d);
         }
       }
@@ -50,9 +48,9 @@ describe('demo-board fixture', () => {
 
   it('obeys the edge type + height rule everywhere', () => {
     for (const p of state.placements) {
-      for (const d of [0, 1, 2, 3] as Dir[]) {
+      for (const d of DIRS) {
         const { dx, dy } = DIR_OFFSETS[d];
-        const n = at.get(`${p.x + dx},${p.y + dy}`) as Placement | undefined;
+        const n = at.get(`${p.x + dx},${p.y + dy}`);
         if (n) expect(edgesMatch(p, n, d), `${p.tileId} -> ${n.tileId} dir ${d}`).toBe(true);
       }
     }

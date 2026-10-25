@@ -70,7 +70,7 @@ export const DECK: TileDef[] = [
     ] },
 ];
 
-export const TILES: ReadonlyMap<string, TileDef> = new Map(DECK.map((t) => [t.id, t]));
+const TILES: ReadonlyMap<string, TileDef> = new Map(DECK.map((t) => [t.id, t]));
 
 export function getTile(id: string): TileDef {
   const def = TILES.get(id);

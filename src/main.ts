@@ -1,5 +1,5 @@
 // Wiring only: builds window.__game from the engine and renderer. Keep this file small.
-import { getTile } from './contracts/deck';
+import { DECK, getTile } from './contracts/deck';
 import type { GameApi } from './contracts/game-api';
 import { INSPECTION_SEGMENTS, type Renderer } from './contracts/renderer';
 import type { GameState, Move } from './contracts/types';
@@ -23,13 +23,18 @@ async function boot(): Promise<void> {
   const tileParam = params.get('tile');
   if (tileParam) {
     getTile(tileParam); // validate early
-    state = { ...state, placements: [{ tileId: tileParam, x: 0, y: 0, rotation: 0, level: 0 }] };
+    // Workbench: one tile alone with nothing in the dock, so no ghost spots.
+    state = {
+      ...state,
+      placements: [{ tileId: tileParam, x: 0, y: 0, rotation: 0, level: 0 }],
+      deckIndex: DECK.length,
+    };
   }
 
   const setState = (next: GameState) => {
     state = next;
     renderer.sync(state);
-    renderer.setGhosts(state.phase === 'place' ? engine.legalMoves(state) : []);
+    renderer.setGhosts(state.deckIndex < DECK.length ? engine.legalMoves(state) : []);
   };
 
   const applyMove = (move: Move) => {
@@ -43,8 +48,8 @@ async function boot(): Promise<void> {
     getLegalMoves: () => engine.legalMoves(state),
     applyMove,
     runReplay: (moves) => {
-      setState(engine.newGame());
-      moves.forEach(applyMove);
+      // Fold first, render once; an illegal move throws before any state is replaced.
+      setState(moves.reduce((s, m) => engine.applyMove(s, m).state, engine.newGame()));
       return state;
     },
     loadState: setState,
@@ -58,14 +63,13 @@ async function boot(): Promise<void> {
     renderFrame: (t) => renderer.renderFrame(t),
     getManifest: () => renderer.getManifest(),
     getInspectionSegments: () => INSPECTION_SEGMENTS,
-    startInspectionFlight: async () => {
-      throw new Error('startInspectionFlight: not implemented'); // TODO(render/inspector)
-    },
+    startInspectionFlight: () => renderer.startInspectionFlight(),
   };
 
   if (params.get('clock') === 'manual') renderer.setClockMode('manual');
   setState(state);
   if (tileParam || fixtureName) await renderer.setView('3d', { instant: true });
+  renderer.renderFrame(0); // `ready` promises a drawn frame, even with the manual clock
   window.__game = api;
 }
 

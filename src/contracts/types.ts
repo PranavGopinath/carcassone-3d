@@ -62,8 +62,6 @@ export interface PlayerState {
   meeplesLeft: number;
 }
 
-export type Phase = 'place' | 'over';
-
 export interface ChainRef {
   x: number;
   y: number;
@@ -88,9 +86,8 @@ export interface GameState {
   players: [PlayerState, PlayerState];
   current: PlayerId;
   turn: number;
-  /** Index into DECK of the tile currently in the dock; DECK.length when exhausted. */
+  /** Index into DECK of the tile in the dock. The game is over when this reaches DECK.length. */
   deckIndex: number;
-  phase: Phase;
   log: ScoreEvent[];
 }
 

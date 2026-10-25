@@ -25,6 +25,8 @@ export interface Renderer {
   /** Render the scene at absolute time tMs (manual clock). */
   renderFrame(tMs: number): void;
   getManifest(): FrameManifest;
+  /** Realtime 12 s camera flight through INSPECTION_SEGMENTS; resolves when finished. */
+  startInspectionFlight(): Promise<void>;
   dispose(): void;
 }
 
@@ -71,4 +73,11 @@ export const INSPECTION_SEGMENTS: InspectionSegment[] = [
   { id: 'macro', startMs: 9000, endMs: 12000, focus: 'Waterfall foam/spray, bridge, meeple contact' },
 ];
 
-export const INSPECTION_DURATION_MS = 12000;
+export const INSPECTION_DURATION_MS = INSPECTION_SEGMENTS[INSPECTION_SEGMENTS.length - 1].endMs;
+
+/** Segment containing tMs. The final frame (tMs === duration) belongs to the last segment. */
+export function segmentAt(tMs: number): InspectionSegmentId | null {
+  const seg = INSPECTION_SEGMENTS.find((s) => tMs >= s.startMs && tMs < s.endMs);
+  if (seg) return seg.id;
+  return tMs === INSPECTION_DURATION_MS ? INSPECTION_SEGMENTS[INSPECTION_SEGMENTS.length - 1].id : null;
+}
