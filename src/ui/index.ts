@@ -32,36 +32,36 @@ export interface UIActions {
   onDropMeepleOnBoard?: (clientX: number, clientY: number) => boolean;
 }
 
-const PREVIEW_SIZE = 176;
+const PREVIEW_SIZE = 132;
 
 /** Socket coordinates (in % of tile preview) for N, E, S, W circular drop targets */
 const SOCKET_POS_PCT: Record<DirIndex, { left: number; top: number }> = {
-  0: { left: 50, top: 16 }, // North
-  1: { left: 84, top: 50 }, // East
-  2: { left: 50, top: 84 }, // South
-  3: { left: 16, top: 50 }, // West
+  0: { left: 50, top: 15 }, // North
+  1: { left: 85, top: 50 }, // East
+  2: { left: 50, top: 85 }, // South
+  3: { left: 15, top: 50 }, // West
 };
 
 /**
- * Standing human silhouette icon matching the meeple bar in `reference/UI_reference.jpg`.
+ * Super clean, minimal geometric person/pawn icon (SF Symbols / Linear style).
  */
-function createPersonSilhouetteSvg(color: string, width = 22, height = 38): string {
+function createPersonSilhouetteSvg(color: string, width = 16, height = 24): string {
   return `
-    <svg width="${width}" height="${height}" viewBox="0 0 24 42" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="12" cy="5.5" r="4" fill="${color}" />
-      <path d="M7 11.5C5.3 11.5 4 12.8 4 14.5V23.5C4 24.6 4.9 25.5 6 25.5C6.8 25.5 7.5 24.9 7.6 24.1V15.5H8.5V38.5C8.5 39.6 9.4 40.5 10.5 40.5C11.4 40.5 12.1 39.8 12.1 38.9V26.5H12.9V38.9C12.9 39.8 13.6 40.5 14.5 40.5C15.6 40.5 16.5 39.6 16.5 38.5V15.5H17.4V24.1C17.5 24.9 18.2 25.5 19 25.5C20.1 25.5 21 24.6 21 23.5V14.5C21 12.8 19.7 11.5 18 11.5H7Z" fill="${color}"/>
+    <svg width="${width}" height="${height}" viewBox="0 0 20 30" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="10" cy="6" r="4.2" fill="${color}" />
+      <path d="M10 12.2C6.1 12.2 3.2 14.8 3.2 18.4V23.2C3.2 24.4 4.2 25.4 5.4 25.4H6.6V27.6C6.6 28.6 7.4 29.4 8.4 29.4H11.6C12.6 29.4 13.4 28.6 13.4 27.6V25.4H14.6C15.8 25.4 16.8 24.4 16.8 23.2V18.4C16.8 14.8 13.9 12.2 10 12.2Z" fill="${color}"/>
     </svg>
   `;
 }
 
 /**
- * Top-left player bust avatar matching `reference/UI_reference.jpg`.
+ * Minimal top-left player bust avatar.
  */
 function createAvatarBustSvg(color: string): string {
   return `
-    <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="16" cy="9.5" r="5.5" fill="${color}"/>
-      <path d="M6 26.5C6 21.5 10.5 18 16 18C21.5 18 26 21.5 26 26.5C26 27.6 25.1 28.5 24 28.5H8C6.9 28.5 6 27.6 6 26.5Z" fill="${color}"/>
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="12" cy="7.5" r="4.2" fill="${color}"/>
+      <path d="M4.5 19.8C4.5 16.1 7.8 13.5 12 13.5C16.2 13.5 19.5 16.1 19.5 19.8C19.5 20.6 18.8 21.2 18 21.2H6C5.2 21.2 4.5 20.6 4.5 19.8Z" fill="${color}"/>
     </svg>
   `;
 }
@@ -125,7 +125,6 @@ export function createGameUI(container: HTMLElement, actions: UIActions) {
   demoBtn.addEventListener('click', () => actions.onStartDemo());
 
   topCenterBar.appendChild(viewToggleBtn);
-  topCenterBar.appendChild(demoBtn);
 
   // 3. Right Frosted Card Sidebar (`reference/UI_reference.jpg`)
   const sidebarCard = document.createElement('div');
@@ -186,7 +185,7 @@ export function createGameUI(container: HTMLElement, actions: UIActions) {
   const bottomSection = document.createElement('div');
   bottomSection.style.display = 'flex';
   bottomSection.style.flexDirection = 'column';
-  bottomSection.style.gap = '12px';
+  bottomSection.style.gap = '8px';
 
   const rotateBtn = document.createElement('button');
   rotateBtn.setAttribute('data-testid', 'rotate-tile');
@@ -253,6 +252,7 @@ export function createGameUI(container: HTMLElement, actions: UIActions) {
 
   rootElement.appendChild(turnIndicator);
   rootElement.appendChild(topCenterBar);
+  rootElement.appendChild(demoBtn);
   rootElement.appendChild(sidebarCard);
   rootElement.appendChild(turnBanner);
   rootElement.appendChild(modalBackdrop);
@@ -293,7 +293,7 @@ export function createGameUI(container: HTMLElement, actions: UIActions) {
     }
     floatingDragEl = document.createElement('div');
     floatingDragEl.className = 'ui-floating-drag-meeple';
-    floatingDragEl.innerHTML = createPersonSilhouetteSvg(color, 28, 46);
+    floatingDragEl.innerHTML = createPersonSilhouetteSvg(color, 13, 19);
     floatingDragEl.style.left = `${e.clientX}px`;
     floatingDragEl.style.top = `${e.clientY}px`;
     document.body.appendChild(floatingDragEl);
@@ -405,7 +405,7 @@ export function createGameUI(container: HTMLElement, actions: UIActions) {
           circleEl.title = `${featureType} (${DIR_NAMES[dir]})`;
 
           if (isOccupiedBySelection) {
-            circleEl.innerHTML = createPersonSilhouetteSvg(activeColor, 16, 26);
+            circleEl.innerHTML = createPersonSilhouetteSvg(activeColor, 12, 18);
             circleEl.addEventListener('pointerdown', (ev) => {
               actions.onSelectMeepleOption(null);
               startPersonPointerDrag(ev, activeColor);
@@ -417,7 +417,7 @@ export function createGameUI(container: HTMLElement, actions: UIActions) {
         });
       }
 
-      // 5. Update Black Meeple Bar (5 silhouette slots matching UI_reference.jpg)
+      // 5. Update Black Meeple Bar (5 minimal silhouette slots)
       meepleBlackBar.innerHTML = '';
       const stagedDeduction = selectedMeeple ? 1 : 0;
       const availableCount = Math.max(
@@ -430,7 +430,7 @@ export function createGameUI(container: HTMLElement, actions: UIActions) {
         const canDrag = isLit && availableTileSpots.length > 0;
         const slotEl = document.createElement('div');
         slotEl.className = `ui-person-slot${isLit ? (canDrag ? ' draggable' : '') : ' inactive'}`;
-        slotEl.innerHTML = createPersonSilhouetteSvg(isLit ? activeColor : '#808896', 22, 38);
+        slotEl.innerHTML = createPersonSilhouetteSvg(isLit ? activeColor : '#6b7280', 16, 24);
 
         if (canDrag) {
           slotEl.title = 'Click and drag onto one of the circles on the tile';
@@ -441,33 +441,30 @@ export function createGameUI(container: HTMLElement, actions: UIActions) {
         meepleBlackBar.appendChild(slotEl);
       }
 
-      // 6. Update Black Score Box
+      // 6. Update Black Scoreboard
       const p1Score = state.players[1]?.score ?? 0;
       const p2Score = state.players[2]?.score ?? 0;
-      const p1Pct = Math.min(100, (p1Score / 30) * 100);
-      const p2Pct = Math.min(100, (p2Score / 30) * 100);
+      const p1Active = !state.gameOver && activeP === 1;
+      const p2Active = !state.gameOver && activeP === 2;
 
       scoreBlackBox.innerHTML = `
-        <div class="ui-score-player-row">
-          <div class="ui-score-player-tag">
+        <div class="ui-scoreboard-col${p1Active ? ' is-active' : ''}" style="--player-accent: #4f6ef7">
+          <div class="ui-scoreboard-header">
             <span class="ui-score-dot" style="background: #4f6ef7"></span>
-            <span>PLAYER 1</span>
+            <span class="ui-scoreboard-name">PLAYER 1</span>
           </div>
-          <span class="ui-score-val">${p1Score}</span>
+          <div class="ui-scoreboard-digits">
+            <span class="ui-score-val">${p1Score}</span>
+          </div>
         </div>
-        <div class="ui-score-player-row">
-          <div class="ui-score-player-tag">
+        <div class="ui-scoreboard-divider" aria-hidden="true"></div>
+        <div class="ui-scoreboard-col${p2Active ? ' is-active' : ''}" style="--player-accent: #e06d3b">
+          <div class="ui-scoreboard-header">
             <span class="ui-score-dot" style="background: #e06d3b"></span>
-            <span>PLAYER 2</span>
+            <span class="ui-scoreboard-name">PLAYER 2</span>
           </div>
-          <span class="ui-score-val">${p2Score}</span>
-        </div>
-        <div class="ui-score-bars">
-          <div class="ui-score-bar-track">
-            <div class="ui-score-bar-fill" style="width: ${p1Pct}%; background: #4f6ef7"></div>
-          </div>
-          <div class="ui-score-bar-track">
-            <div class="ui-score-bar-fill" style="width: ${p2Pct}%; background: #e06d3b"></div>
+          <div class="ui-scoreboard-digits">
+            <span class="ui-score-val">${p2Score}</span>
           </div>
         </div>
       `;
@@ -494,13 +491,24 @@ export function createGameUI(container: HTMLElement, actions: UIActions) {
 
         if (finalScores) {
           finalScores.innerHTML = `
-            <div class="ui-final-player">
-              <span class="ui-final-pname" style="color: #4f6ef7">Player 1</span>
-              <span class="ui-final-pscore">${p1Score}</span>
+            <div class="ui-scoreboard-col${p1Score >= p2Score ? ' is-active' : ''}" style="--player-accent: #4f6ef7">
+              <div class="ui-scoreboard-header">
+                <span class="ui-score-dot" style="background: #4f6ef7"></span>
+                <span class="ui-scoreboard-name">PLAYER 1</span>
+              </div>
+              <div class="ui-scoreboard-digits">
+                <span class="ui-score-val">${p1Score}</span>
+              </div>
             </div>
-            <div class="ui-final-player">
-              <span class="ui-final-pname" style="color: #e06d3b">Player 2</span>
-              <span class="ui-final-pscore">${p2Score}</span>
+            <div class="ui-scoreboard-divider" aria-hidden="true"></div>
+            <div class="ui-scoreboard-col${p2Score >= p1Score ? ' is-active' : ''}" style="--player-accent: #e06d3b">
+              <div class="ui-scoreboard-header">
+                <span class="ui-score-dot" style="background: #e06d3b"></span>
+                <span class="ui-scoreboard-name">PLAYER 2</span>
+              </div>
+              <div class="ui-scoreboard-digits">
+                <span class="ui-score-val">${p2Score}</span>
+              </div>
             </div>
           `;
         }

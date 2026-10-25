@@ -64,8 +64,8 @@ function rotateVec(dx: number, dy: number, rotation: Rotation): { x: number; y: 
 }
 
 /**
- * Draws the interior grass texture, mowing stripes, and hill/plateau contour terraces
- * strictly within `inset >= 10px` so outer edge sockets remain pure PALETTE colors.
+ * Draws the interior grass texture, organic meadow patches, grass blade tufts, canopy clusters,
+ * and hill/plateau contour terraces strictly within `inset >= 9px` so outer edge sockets remain pure PALETTE colors.
  */
 function drawInteriorGrassAndContours(
   ctx: CanvasRenderingContext2D,
@@ -74,7 +74,7 @@ function drawInteriorGrassAndContours(
   levels: [number, number, number, number],
   size: number
 ): void {
-  const margin = Math.max(10, Math.round(0.04 * size));
+  const margin = Math.max(9, Math.round(0.036 * size));
   const half = size / 2;
 
   ctx.save();
@@ -82,31 +82,69 @@ function drawInteriorGrassAndContours(
   ctx.rect(margin, margin, size - margin * 2, size - margin * 2);
   ctx.clip();
 
-  // Subtle mowing stripes rotated with the tile
+  // Warm sunlight gradient across meadow (top-right sunlit, bottom-left deeper green)
+  const sunGrad = ctx.createLinearGradient(size * 0.85, size * 0.1, size * 0.15, size * 0.9);
+  sunGrad.addColorStop(0, 'rgba(154, 204, 92, 0.34)');
+  sunGrad.addColorStop(0.5, 'rgba(108, 166, 76, 0.0)');
+  sunGrad.addColorStop(1, 'rgba(64, 114, 42, 0.32)');
+  ctx.fillStyle = sunGrad;
+  ctx.fillRect(margin, margin, size - margin * 2, size - margin * 2);
+
+  // Subtle mowing / terrain contour bands rotated with the tile
   ctx.save();
   ctx.translate(half, half);
-  ctx.rotate((rotation * Math.PI) / 2);
-  const stripeW = size * 0.08;
-  for (let i = -8; i <= 8; i++) {
-    ctx.fillStyle = i % 2 === 0 ? 'rgba(118, 176, 84, 0.25)' : 'rgba(98, 156, 68, 0.22)';
-    ctx.fillRect(i * stripeW, -half, stripeW * 0.55, size);
+  ctx.rotate((rotation * Math.PI) / 2 + 0.35);
+  const stripeW = size * 0.075;
+  for (let i = -9; i <= 9; i++) {
+    ctx.fillStyle = i % 2 === 0 ? 'rgba(132, 188, 86, 0.16)' : 'rgba(82, 136, 54, 0.15)';
+    ctx.fillRect(i * stripeW, -size, stripeW * 0.52, size * 2);
   }
   ctx.restore();
 
-  // Subtle deterministic grass tuft flecks inside interior
-  for (let i = 0; i < 18; i++) {
-    const rx = (hash01(spec.id, i * 2) - 0.5) * (size - margin * 3);
-    const ry = (hash01(spec.id, i * 2 + 1) - 0.5) * (size - margin * 3);
+  // Organic dappled meadow patches
+  for (let i = 0; i < 28; i++) {
+    const rx = (hash01(spec.id, i * 3 + 10) - 0.5) * (size - margin * 2.4);
+    const ry = (hash01(spec.id, i * 3 + 11) - 0.5) * (size - margin * 2.4);
+    const rad = size * (0.04 + hash01(spec.id, i * 3 + 12) * 0.07);
     const rotPt = rotateVec(rx, ry, rotation);
     const gx = half + rotPt.x;
     const gy = half + rotPt.y;
-    ctx.fillStyle = i % 2 === 0 ? 'rgba(88, 144, 58, 0.35)' : 'rgba(130, 188, 92, 0.35)';
+    const patchGrad = ctx.createRadialGradient(gx, gy, 0, gx, gy, rad);
+    if (i % 2 === 0) {
+      patchGrad.addColorStop(0, 'rgba(148, 202, 88, 0.28)');
+      patchGrad.addColorStop(1, 'rgba(148, 202, 88, 0)');
+    } else {
+      patchGrad.addColorStop(0, 'rgba(66, 118, 42, 0.26)');
+      patchGrad.addColorStop(1, 'rgba(66, 118, 42, 0)');
+    }
+    ctx.fillStyle = patchGrad;
     ctx.beginPath();
-    ctx.arc(gx, gy, size * 0.012, 0, Math.PI * 2);
+    ctx.arc(gx, gy, rad, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  // Elevation terrace contours for GRASS_HILL and GRASS_PLATEAU
+  // Fine deterministic grass blade tufts & meadow shrubs
+  for (let i = 0; i < 42; i++) {
+    const rx = (hash01(spec.id, i * 2) - 0.5) * (size - margin * 2.6);
+    const ry = (hash01(spec.id, i * 2 + 1) - 0.5) * (size - margin * 2.6);
+    const rotPt = rotateVec(rx, ry, rotation);
+    const gx = half + rotPt.x;
+    const gy = half + rotPt.y;
+
+    // Tiny shadow under tuft
+    ctx.fillStyle = 'rgba(38, 68, 24, 0.28)';
+    ctx.beginPath();
+    ctx.arc(gx + size * 0.004, gy + size * 0.005, size * 0.013, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Sunlit tuft
+    ctx.fillStyle = i % 3 === 0 ? '#8ec654' : i % 3 === 1 ? '#528836' : '#72b046';
+    ctx.beginPath();
+    ctx.arc(gx, gy, size * 0.011, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Elevation terrace contours for GRASS_HILL and GRASS_PLATEAU with rocky earth ledges
   if (spec.special === 'GRASS_HILL') {
     for (let s = 0 as DirIndex; s < 4; s = (s + 1) as DirIndex) {
       if (levels[s] > 0) {
@@ -117,13 +155,13 @@ function drawInteriorGrassAndContours(
           ctx.arc(mid.x, mid.y, r, 0, Math.PI * 2);
           ctx.fillStyle =
             step === 1
-              ? 'rgba(142, 198, 98, 0.48)'
+              ? 'rgba(148, 202, 98, 0.52)'
               : step === 2
-                ? 'rgba(126, 184, 86, 0.40)'
-                : 'rgba(114, 172, 78, 0.32)';
+                ? 'rgba(128, 186, 84, 0.44)'
+                : 'rgba(112, 170, 74, 0.36)';
           ctx.fill();
-          ctx.lineWidth = Math.max(1.5, size * 0.009);
-          ctx.strokeStyle = 'rgba(74, 124, 48, 0.55)';
+          ctx.lineWidth = Math.max(2, size * 0.012);
+          ctx.strokeStyle = 'rgba(116, 86, 56, 0.62)';
           ctx.stroke();
         }
       }
@@ -134,12 +172,12 @@ function drawInteriorGrassAndContours(
       const w = size - insetStep * 2;
       ctx.fillStyle =
         step === 1
-          ? 'rgba(144, 200, 100, 0.42)'
+          ? 'rgba(150, 204, 102, 0.46)'
           : step === 2
-            ? 'rgba(128, 186, 88, 0.34)'
-            : 'rgba(116, 174, 80, 0.28)';
-      ctx.strokeStyle = 'rgba(74, 124, 48, 0.55)';
-      ctx.lineWidth = Math.max(1.5, size * 0.008);
+            ? 'rgba(130, 188, 88, 0.38)'
+            : 'rgba(114, 172, 78, 0.30)';
+      ctx.strokeStyle = 'rgba(116, 86, 56, 0.62)';
+      ctx.lineWidth = Math.max(2, size * 0.01);
       ctx.beginPath();
       ctx.rect(insetStep, insetStep, w, w);
       ctx.fill();
@@ -151,7 +189,8 @@ function drawInteriorGrassAndContours(
 }
 
 /**
- * Draws CITY segments, corner merges, interior stone walls, crenellations, roofs, and windows.
+ * Draws CITY segments, corner merges, realistic limestone battlements, round blue-roofed towers,
+ * and dense medieval terracotta/slate town roofs matching `reference/Design_of_game.jpeg`.
  */
 function drawCities(
   ctx: CanvasRenderingContext2D,
@@ -167,10 +206,10 @@ function drawCities(
   }
   if (citySides.length === 0) return;
 
-  const depth = 0.33 * size;
+  const depth = 0.34 * size;
   const half = size / 2;
 
-  // 1. Fill individual city edge bands
+  // 1. Fill individual city edge bands with canonical PALETTE.CITY base
   ctx.fillStyle = rgbStr(PALETTE.CITY);
   for (const s of citySides) {
     const prevSide = ((s + 3) % 4) as DirIndex;
@@ -216,19 +255,51 @@ function drawCities(
       ctx.lineTo(p1.x, p1.y);
     }
     if (citySides.length >= 3) {
-      // 3-edge stronghold covers center while leaving the 4th GRASS edge clear
       ctx.lineTo(half, half);
     }
     ctx.closePath();
     ctx.fill();
   }
 
-  // 3. Draw interior fortified wall rims, crenellations, roof rows, and windows (strictly inset >= 10px)
-  const interiorMargin = Math.max(10, Math.round(0.04 * size));
+  // 3. Draw interior fortified wall rims, round towers, pitched medieval roofs (strictly inset >= 9px)
+  const interiorMargin = Math.max(9, Math.round(0.036 * size));
   ctx.save();
   ctx.beginPath();
   ctx.rect(interiorMargin, interiorMargin, size - interiorMargin * 2, size - interiorMargin * 2);
   ctx.clip();
+
+  // Helper to paint a pitched medieval roof with sunlit and shaded slopes
+  const drawPitchedHouseRoof = (cx: number, cy: number, w: number, h: number, angle: number, isBlue = false) => {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(angle);
+
+    // Drop shadow
+    ctx.fillStyle = 'rgba(28, 18, 12, 0.38)';
+    ctx.fillRect(-w / 2 + size * 0.008, -h / 2 + size * 0.008, w, h);
+
+    // Sunlit upper slope
+    ctx.fillStyle = isBlue ? '#5b769e' : '#d4653b';
+    ctx.fillRect(-w / 2, -h / 2, w, h * 0.5);
+
+    // Shaded lower slope
+    ctx.fillStyle = isBlue ? '#3e5373' : '#9e3f22';
+    ctx.fillRect(-w / 2, 0, w, h * 0.5);
+
+    // Roof outline & ridge line
+    ctx.strokeStyle = '#3b2314';
+    ctx.lineWidth = Math.max(1, size * 0.004);
+    ctx.strokeRect(-w / 2, -h / 2, w, h);
+
+    ctx.strokeStyle = isBlue ? '#93b4db' : '#f29a72';
+    ctx.lineWidth = Math.max(1, size * 0.005);
+    ctx.beginPath();
+    ctx.moveTo(-w / 2, 0);
+    ctx.lineTo(w / 2, 0);
+    ctx.stroke();
+
+    ctx.restore();
+  };
 
   for (const s of citySides) {
     const prevSide = ((s + 3) % 4) as DirIndex;
@@ -236,44 +307,84 @@ function drawCities(
     const prevCity = edges[prevSide] === 'CITY' && spec.special !== 'CITY_SEPARATE';
     const nextCity = edges[nextSide] === 'CITY' && spec.special !== 'CITY_SEPARATE';
 
-    // Draw roof tiles and windows inside the city band (depth 0.10..0.24 * size)
-    for (const u of [0.24, 0.42, 0.58, 0.76]) {
-      const roofCenter = edgePointCW(s, u, size * 0.16, size);
-      const rW = size * 0.09;
-      const rH = size * 0.065;
-      // Terracotta / slate roofs
-      ctx.fillStyle = u === 0.42 ? '#64748b' : '#b86b43';
-      ctx.fillRect(roofCenter.x - rW / 2, roofCenter.y - rH / 2, rW, rH);
-      ctx.strokeStyle = '#5c3a21';
-      ctx.lineWidth = Math.max(1, size * 0.005);
-      ctx.strokeRect(roofCenter.x - rW / 2, roofCenter.y - rH / 2, rW, rH);
-
-      // Tiny dark window
-      ctx.fillStyle = '#292524';
-      ctx.fillRect(roofCenter.x - size * 0.01, roofCenter.y - size * 0.01, size * 0.02, size * 0.02);
+    // Dense medieval houses inside the city sector
+    const baseAngle = (s * Math.PI) / 2;
+    for (const [idx, u] of [0.2, 0.35, 0.5, 0.65, 0.8].entries()) {
+      const rowInset = size * (idx % 2 === 0 ? 0.14 : 0.21);
+      const roofCenter = edgePointCW(s, u, rowInset, size);
+      const rW = size * (idx === 2 ? 0.105 : 0.085);
+      const rH = size * 0.062;
+      drawPitchedHouseRoof(
+        roofCenter.x,
+        roofCenter.y,
+        rW,
+        rH,
+        baseAngle + (idx % 2 === 0 ? 0.08 : -0.12),
+        idx === 1 || idx === 3
+      );
     }
 
-    // Draw inner wall rim when not covered by 3-edge center merge
+    // Inner fortified limestone wall & blue-coned round towers
     if (citySides.length === 1 || spec.special === 'CITY_SEPARATE' || citySides.length === 2) {
-      const pInnerStart = edgePointCW(s, prevCity ? 0.12 : 0.10, depth * 0.92, size);
-      const pInnerMid = edgePointCW(s, 0.5, depth, size);
-      const pInnerEnd = edgePointCW(s, nextCity ? 0.88 : 0.90, depth * 0.92, size);
+      const pInnerStart = edgePointCW(s, prevCity ? 0.10 : 0.08, depth * 0.9, size);
+      const pInnerMid = edgePointCW(s, 0.5, depth * 0.98, size);
+      const pInnerEnd = edgePointCW(s, nextCity ? 0.90 : 0.92, depth * 0.9, size);
 
+      // Wall outer shadow onto meadow
       ctx.beginPath();
       ctx.moveTo(pInnerStart.x, pInnerStart.y);
       ctx.quadraticCurveTo(pInnerMid.x, pInnerMid.y, pInnerEnd.x, pInnerEnd.y);
-      ctx.strokeStyle = '#6e5036';
-      ctx.lineWidth = Math.max(3, size * 0.022);
+      ctx.strokeStyle = 'rgba(30, 42, 20, 0.42)';
+      ctx.lineWidth = Math.max(5, size * 0.036);
       ctx.stroke();
 
-      // Crenellation merlons along the wall
-      for (const tu of [0.22, 0.36, 0.5, 0.64, 0.78]) {
-        const mp = edgePointCW(s, tu, depth * 0.94, size);
-        const mSize = size * 0.024;
-        ctx.fillStyle = '#d6c7b2';
-        ctx.fillRect(mp.x - mSize / 2, mp.y - mSize / 2, mSize, mSize);
+      // Limestone curtain wall
+      ctx.beginPath();
+      ctx.moveTo(pInnerStart.x, pInnerStart.y);
+      ctx.quadraticCurveTo(pInnerMid.x, pInnerMid.y, pInnerEnd.x, pInnerEnd.y);
+      ctx.strokeStyle = '#dfd3be';
+      ctx.lineWidth = Math.max(3.5, size * 0.024);
+      ctx.stroke();
+
+      // Crenellation merlons & round conical-roofed bastion towers along the wall
+      for (const [tIdx, tu] of [0.16, 0.33, 0.5, 0.67, 0.84].entries()) {
+        const mp = edgePointCW(s, tu, depth * 0.92, size);
+        if (tIdx % 2 === 0) {
+          // Cylindrical tower with conical blue slate roof (matching Design_of_game.jpeg)
+          const tRad = size * 0.028;
+          ctx.fillStyle = 'rgba(20, 24, 32, 0.35)';
+          ctx.beginPath();
+          ctx.arc(mp.x + size * 0.005, mp.y + size * 0.005, tRad * 1.1, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.fillStyle = '#e5dac6';
+          ctx.beginPath();
+          ctx.arc(mp.x, mp.y, tRad, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.fillStyle = '#486288';
+          ctx.beginPath();
+          ctx.arc(mp.x, mp.y, tRad * 0.78, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.fillStyle = '#7fa1cc';
+          ctx.beginPath();
+          ctx.arc(mp.x - tRad * 0.2, mp.y - tRad * 0.2, tRad * 0.3, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          const mSize = size * 0.022;
+          ctx.fillStyle = '#ede4d4';
+          ctx.fillRect(mp.x - mSize / 2, mp.y - mSize / 2, mSize, mSize);
+        }
       }
     }
+  }
+
+  // If 3-edge stronghold, draw a central citadel keep plaza
+  if (citySides.length >= 3) {
+    drawPitchedHouseRoof(half, half, size * 0.16, size * 0.11, 0.2, false);
+    drawPitchedHouseRoof(half - size * 0.1, half + size * 0.08, size * 0.11, size * 0.08, -0.4, true);
+    drawPitchedHouseRoof(half + size * 0.1, half - size * 0.07, size * 0.11, size * 0.08, 0.5, false);
   }
 
   ctx.restore();
@@ -327,15 +438,22 @@ function drawRivers(
     }
   };
 
-  // 1. Interior river bank outline (clipped to interior >= bankMargin so edge sockets stay clean)
+  // 1. Interior river bank outline & sandy shallows (clipped to interior >= bankMargin so edge sockets stay clean)
   ctx.save();
   ctx.beginPath();
   ctx.rect(bankMargin, bankMargin, size - bankMargin * 2, size - bankMargin * 2);
   ctx.clip();
 
   traceRiverPath();
-  ctx.strokeStyle = '#3b6e52';
-  ctx.lineWidth = wWater + Math.max(4, size * 0.028);
+  ctx.strokeStyle = 'rgba(42, 78, 36, 0.55)';
+  ctx.lineWidth = wWater + Math.max(6, size * 0.044);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+
+  traceRiverPath();
+  ctx.strokeStyle = '#9e9275';
+  ctx.lineWidth = wWater + Math.max(3, size * 0.022);
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.stroke();
@@ -356,16 +474,22 @@ function drawRivers(
     ctx.fill();
   }
 
-  // 3. Subtle interior water flow highlights (strictly clipped to interior >= 12px)
-  const rippleMargin = Math.max(12, Math.round(0.05 * size));
+  // 3. Deep channel & shimmering water flow highlights (strictly clipped to interior >= 11px)
+  const rippleMargin = Math.max(11, Math.round(0.045 * size));
   ctx.save();
   ctx.beginPath();
   ctx.rect(rippleMargin, rippleMargin, size - rippleMargin * 2, size - rippleMargin * 2);
   ctx.clip();
 
   traceRiverPath();
-  ctx.strokeStyle = 'rgba(135, 202, 248, 0.35)';
-  ctx.lineWidth = wWater * 0.28;
+  ctx.strokeStyle = 'rgba(28, 92, 152, 0.42)';
+  ctx.lineWidth = wWater * 0.55;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+
+  traceRiverPath();
+  ctx.strokeStyle = 'rgba(165, 224, 255, 0.42)';
+  ctx.lineWidth = wWater * 0.2;
   ctx.lineCap = 'round';
   ctx.stroke();
   ctx.restore();
@@ -417,15 +541,22 @@ function drawRoads(
     }
   };
 
-  // 1. Interior road verge/curb (clipped to >= vergeMargin)
+  // 1. Interior road grass shadow & stone curb (clipped to >= vergeMargin)
   ctx.save();
   ctx.beginPath();
   ctx.rect(vergeMargin, vergeMargin, size - vergeMargin * 2, size - vergeMargin * 2);
   ctx.clip();
 
   traceRoadPath();
-  ctx.strokeStyle = '#8c7a5b';
-  ctx.lineWidth = wRoad + Math.max(3, size * 0.02);
+  ctx.strokeStyle = 'rgba(46, 72, 28, 0.48)';
+  ctx.lineWidth = wRoad + Math.max(5, size * 0.034);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+
+  traceRoadPath();
+  ctx.strokeStyle = '#7c6d56';
+  ctx.lineWidth = wRoad + Math.max(2.5, size * 0.018);
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.stroke();
@@ -442,24 +573,33 @@ function drawRoads(
   if (roadSides.length >= 3 || roadSides.length === 1) {
     ctx.fillStyle = rgbStr(PALETTE.ROAD);
     ctx.beginPath();
-    ctx.arc(half, half, wRoad * 0.58, 0, Math.PI * 2);
+    ctx.arc(half, half, wRoad * 0.62, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  // 3. Subtle cobblestone center speckles (clipped to >= 12px)
-  const cobbleMargin = Math.max(12, Math.round(0.05 * size));
+  // 3. Detailed cobblestone pavers & wheel tracks (clipped to >= 11px)
+  const cobbleMargin = Math.max(11, Math.round(0.045 * size));
   ctx.save();
   ctx.beginPath();
   ctx.rect(cobbleMargin, cobbleMargin, size - cobbleMargin * 2, size - cobbleMargin * 2);
   ctx.clip();
 
+  traceRoadPath();
+  ctx.strokeStyle = 'rgba(142, 126, 98, 0.35)';
+  ctx.lineWidth = wRoad * 0.48;
+  ctx.setLineDash([Math.max(2, size * 0.018), Math.max(2, size * 0.014)]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
   for (const s of roadSides) {
-    for (const d of [0.16, 0.28, 0.4]) {
-      const pt = edgePointCW(s, 0.5, d * size, size);
-      ctx.fillStyle = 'rgba(168, 148, 110, 0.45)';
-      ctx.beginPath();
-      ctx.arc(pt.x, pt.y, size * 0.012, 0, Math.PI * 2);
-      ctx.fill();
+    for (const d of [0.12, 0.2, 0.28, 0.36, 0.44]) {
+      for (const lat of [-0.038, 0.0, 0.038]) {
+        const pt = edgePointCW(s, 0.5 + lat, d * size, size);
+        ctx.fillStyle = lat === 0 ? 'rgba(182, 168, 138, 0.55)' : 'rgba(148, 134, 108, 0.48)';
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, size * 0.01, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
   }
   ctx.restore();
@@ -814,6 +954,88 @@ function enforceEdgeSocketCollar(
 }
 
 /**
+ * Draws realistic top-down tree canopy groves and roadside medieval cottages in open meadow quadrants
+ * strictly inside `inset >= 16px` and clear of CITY/ROAD/WATER paths.
+ */
+function drawMeadowTreesAndHamlets(
+  ctx: CanvasRenderingContext2D,
+  spec: TileSpec,
+  edges: [EdgeType, EdgeType, EdgeType, EdgeType],
+  size: number
+): void {
+  const safeInset = Math.max(16, Math.round(0.065 * size));
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(safeInset, safeInset, size - safeInset * 2, size - safeInset * 2);
+  ctx.clip();
+
+  // 4 corner quadrants: NW (3,0), NE (0,1), SE (1,2), SW (2,3)
+  const quadrants: Array<{ qx: number; qy: number; sideA: DirIndex; sideB: DirIndex; idx: number }> = [
+    { qx: size * 0.2, qy: size * 0.2, sideA: 3, sideB: 0, idx: 0 },
+    { qx: size * 0.8, qy: size * 0.2, sideA: 0, sideB: 1, idx: 1 },
+    { qx: size * 0.8, qy: size * 0.8, sideA: 1, sideB: 2, idx: 2 },
+    { qx: size * 0.2, qy: size * 0.8, sideA: 2, sideB: 3, idx: 3 },
+  ];
+
+  for (const q of quadrants) {
+    if (edges[q.sideA] === 'CITY' || edges[q.sideB] === 'CITY') continue;
+
+    // Draw a cluster of 2-3 lush tree canopies in open meadow corners (matching Design_of_game.jpeg)
+    for (let t = 0; t < 3; t++) {
+      const ox = (hash01(spec.id, q.idx * 10 + t * 2) - 0.5) * size * 0.12;
+      const oy = (hash01(spec.id, q.idx * 10 + t * 2 + 1) - 0.5) * size * 0.12;
+      const tx = q.qx + ox;
+      const ty = q.qy + oy;
+      const rad = size * (0.026 + (t % 2) * 0.01);
+
+      // Canopy cast shadow
+      ctx.fillStyle = 'rgba(24, 46, 16, 0.38)';
+      ctx.beginPath();
+      ctx.arc(tx + size * 0.009, ty + size * 0.009, rad * 1.05, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Deep foliage base
+      ctx.fillStyle = t % 2 === 0 ? '#2f5c22' : '#3d6e2a';
+      ctx.beginPath();
+      ctx.arc(tx, ty, rad, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Sunlit foliage crown
+      ctx.fillStyle = t % 2 === 0 ? '#5c943b' : '#74ad4a';
+      ctx.beginPath();
+      ctx.arc(tx - rad * 0.22, ty - rad * 0.22, rad * 0.68, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // If adjacent to a ROAD and not WATER/LAKE/CLOISTER, add a tiny roadside cottage roof
+    const hasRoad = edges[q.sideA] === 'ROAD' || edges[q.sideB] === 'ROAD';
+    const hasWater = edges[q.sideA] === 'WATER' || edges[q.sideB] === 'WATER';
+    if (hasRoad && !hasWater && spec.special !== 'CLOISTER' && q.idx % 2 === 1) {
+      const hx = size * 0.5 + (q.qx - size * 0.5) * 0.52;
+      const hy = size * 0.5 + (q.qy - size * 0.5) * 0.52;
+      const cw = size * 0.068;
+      const ch = size * 0.048;
+
+      ctx.save();
+      ctx.translate(hx, hy);
+      ctx.rotate(q.idx * 0.55);
+      ctx.fillStyle = 'rgba(28, 18, 12, 0.35)';
+      ctx.fillRect(-cw / 2 + size * 0.006, -ch / 2 + size * 0.006, cw, ch);
+      ctx.fillStyle = '#cf5f36';
+      ctx.fillRect(-cw / 2, -ch / 2, cw, ch * 0.52);
+      ctx.fillStyle = '#993d1f';
+      ctx.fillRect(-cw / 2, 0, cw, ch * 0.48);
+      ctx.strokeStyle = '#3b2314';
+      ctx.lineWidth = Math.max(1, size * 0.004);
+      ctx.strokeRect(-cw / 2, -ch / 2, cw, ch);
+      ctx.restore();
+    }
+  }
+
+  ctx.restore();
+}
+
+/**
  * Procedurally paints a Carcassonne-3D (Tiers) tile onto a 2D canvas context.
  * Works identically in browser `HTMLCanvasElement` and Node `@napi-rs/canvas`.
  */
@@ -845,10 +1067,13 @@ export function paintTile(
   // 6. Special interior landmarks (waterfalls, bridges, lake, spring, cloister, city gate)
   drawSpecials(ctx, spec, rotatedEdges, rotatedLevels, size);
 
-  // 7. Level indicator tabs at inset 10..15px
+  // 7. Meadow tree groves and roadside hamlet cottages
+  drawMeadowTreesAndHamlets(ctx, spec, rotatedEdges, size);
+
+  // 8. Level indicator tabs at inset 10..15px
   drawLevelCues(ctx, rotatedLevels, size);
 
-  // 8. Enforce outer socket collar (inset 0..6px) for exact pixel probes & seam stitching
+  // 9. Enforce outer socket collar (inset 0..6px) for exact pixel probes & seam stitching
   enforceEdgeSocketCollar(ctx, rotatedEdges, size);
 }
 

@@ -113,7 +113,7 @@ function bootstrap() {
     state = loadNamedFixture('fixture-all-features');
   }
 
-  let viewMode: ViewMode = '2d';
+  let viewMode: ViewMode = inspectMode ? '2d' : '3d';
   let themeMode: ThemeMode = 'day';
   let qualityMode: QualityMode = 'high';
   let selectedMeeple: { edgeIndex: DirIndex; featureType: Exclude<EdgeType, 'GRASS'> } | null = null;
@@ -223,8 +223,11 @@ function bootstrap() {
   });
 
   // Render first frame before exposing window.__game
+  renderer.setView(viewMode, true);
   syncAll();
-  renderer.renderAt(0);
+  if (inspectMode) {
+    renderer.renderAt(0);
+  }
 
   const api: InspectorAPI = {
     ready: true,
