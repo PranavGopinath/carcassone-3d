@@ -1,6 +1,6 @@
 {
   "_fieldNotes": {
-    "hooks": "Names of functions on window[global]. null = optional. ready: resolves when textures are loaded; if null, wait for document.fonts.ready plus one renderAt(0). injectDefect(name): optional, lets the golden set break the real scene (e.g. 'floating-prop', 'hovering-meeple', 'pop-in'). Gameplay hooks: playAt(t) renders live play at play-clock time t with every tween (tile drop, meeple drop, highlights, score popups, view morph) driven by t; botMove() lets the deterministic bot choose and apply its next move including a meeple, animated on the play clock; showLegalMoves(on) toggles placement highlights; setView(mode, instant?) switches view. loadFixture(name) must throw on unknown names; 'fixture-midgame' must leave at least 4 tiles in the deck and let the scripted bot moves complete at least one feature. audit() must also return marks.<name> (screen positions [{shot,x,y,label}] for floatingProps, ungroundedMeeples and tileLabels) and viewConsistency (per tile, the features and objects drawn in 2D vs present in 3D, with mismatches).",
+    "hooks": "Names of functions on window[global]. null = optional. ready: resolves when textures are loaded; if null, wait for document.fonts.ready plus one renderAt(0). injectDefect(name): optional, lets the golden set break the real scene (e.g. 'floating-prop', 'hovering-meeple', 'pop-in'). Gameplay hooks: playAt(t) renders live play at play-clock time t with every tween (tile drop, meeple drop, highlights, score popups, view morph) driven by t; botMove() lets the deterministic bot choose and apply its next move including a meeple, animated on the play clock; showLegalMoves(on) toggles placement highlights; setView(mode, instant?) switches view. loadFixture(name) must throw on unknown names; 'fixture-midgame' must leave at least 4 tiles in the deck and let the scripted bot moves complete at least one feature. audit() must also return marks.<name> (screen positions [{shot,x,y,label}] for floatingProps, ungroundedMeeples and tileLabels) and viewConsistency (per tile, the features and objects drawn in 2D vs present in 3D, with mismatches). getView() returns the active view. startDemo() (behind the Auto Demo button) must build the game in the active view instead of forcing 2D, and in inspect mode its pacing (move delay, morph, orbit) must run on the play clock so playAt(t) captures it; the whole demo must fit the demo script's duration.",
     "timeUnit": "'s' or 'ms': the unit renderAt expects.",
     "frameDiff": "Spike = per-cell (grid x grid) or second-order changed-pixel fraction > spikeFactor x its segment median.",
     "shots": "Canvas-clipped shots from captureShot.",
@@ -12,7 +12,7 @@
     "limits": "plateauIterations: non-improving iterations in a row before escalating to lead_architect. budgetUsd is a safety net set well above a full run's cost; maxIterations normally ends the run.",
     "timeline.motionSegments": "Cinematic segments sent to judge_a as clipped videos. Gameplay videos are always sent too.",
     "views": "Every view the game has. Each iteration captures and judges all of them (hard rule 9).",
-    "gameplay": "Scripted play, captured full-page at fps on the play clock. Steps: {at, call, args} invokes a hook; {at, click} is a real Playwright click on a selector. perView scripts run once per view; others once from startView. label is shown to judges as the expected event. expect: JS expression over before/after (step) or start/end (script) getState() snapshots; false is a stepErrors failure. Steps that change neither state nor frame are also stepErrors.",
+    "gameplay": "Scripted play, captured full-page at fps on the play clock. Steps: {at, call, args} invokes a hook; {at, click} is a real Playwright click on a selector. perView scripts run once per view; others once from startView. label is shown to judges as the expected event. expect: JS expression over before/after (step) or start/end (script) getState() snapshots; false is a stepErrors failure. Steps that change neither state nor frame are also stepErrors. Script expect can also use startView and views (getView() at every frame); the demo script allows the last 4s (48 frames) for the final morph and orbit.",
     "outOfScope": "Areas owned by someone else. Judges ignore them; patches that change them are rejected (hard rule 11).",
     "outOfScopePaths": "Files that implement out-of-scope areas. Diffs touching them are rejected.",
     "baseBranch": "Branch the loop starts from and merges its best iteration back into (locally, never pushed)."
@@ -36,7 +36,8 @@
     "playAt": "playAt",
     "botMove": "botMove",
     "showLegalMoves": "showLegalMoves",
-    "setView": "setView"
+    "setView": "setView",
+    "getView": "getView"
   },
   "fixture": "fixture-all-features",
   "timeline": {
@@ -118,6 +119,13 @@
           { "at": 0.5, "click": "[data-testid=view-toggle]", "label": "click 2D -> 3D" },
           { "at": 3.0, "click": "[data-testid=view-toggle]", "label": "click 3D -> 2D" }
         ]
+      },
+      {
+        "id": "demo",
+        "perView": true,
+        "duration": 20,
+        "steps": [{ "at": 0.2, "click": "[data-testid=demo-button]", "label": "click Auto Demo" }],
+        "expect": "end.gameOver && views.slice(0, -48).every(v => v === startView)"
       }
     ]
   },

@@ -63,7 +63,7 @@ On startup:
    3. After each step settles (the frame before the next step), run `audit()` and keep its fields per step, so `audit:*` sources can be checked at every step of play, not just on a static board.
    4. Record any console error or exception thrown during a step as a `stepErrors` hard-check failure, with the step and time. Also record as `stepErrors`:
       - a **no-op step**: a step after which neither `getState()` nor the frame changed (e.g. an unknown fixture name that silently loads the same board, or a bot move with no tiles left)
-      - a failed **expectation**: a step's `expect` is a JS expression over `before` and `after` (`getState()` snapshots around the step); a script's `expect` is one over `start` and `end` (around the whole script). Either evaluating to false is a failure naming the expression.
+      - a failed **expectation**: a step's `expect` is a JS expression over `before` and `after` (`getState()` snapshots around the step, each with a `view` field from the `getView` hook); a script's `expect` is one over `start` and `end` (around the whole script), `startView`, and `views` (the `getView()` value recorded at every captured frame). Either evaluating to false is a failure naming the expression.
    5. Run `blankFrame` and `frameDiff` on the script's frames, and stitch `play-<scriptId>-<view>.webm`.
    Gameplay animation (tile drop, meeple drop, highlights, score popups, view morphs) must be driven by `playAt(t)`, never wall clock; if two captures of a script differ beyond tolerance, report a determinism defect.
 7. **Hard checks:**
@@ -175,7 +175,7 @@ Use a fake scene, `tests/fixtures/loop-scene.html`: a cube with the hooks.
 5. `uncertain` after the re-ask resolves to fail.
 6. A worse or tied iteration resets to the best commit; a plateau triggers escalation; a failed escalation stops the loop; nothing reads stdin.
 7. Gameplay steps fire before the first frame at or after their `at`; a `click` on the fake scene's button changes state; a step that throws records a `stepErrors` failure.
-8. An item with `views: ["2d","3d"]` that passes in 2D and fails in 3D fails overall, and a change that fixes 3D but breaks 2D counts as worse.
+8. An item with `views: ["2d","3d"]` that passes in 2D and fails in 3D fails overall, and a change that fixes 3D but breaks 2D counts as worse. A script `expect` over `views` fails when the fake scene switches view partway through.
 9. A fake-scene object that appears in one frame during a gameplay step trips `frameDiff`; the same object tweened over 5 frames does not.
 10. A `pairViews` item receives matching 2D and 3D images with the same tile marks; an object present in only one view of the fake scene produces a defect naming that tile.
 11. A patch touching `outOfScopePaths` is rejected, and a pairwise verdict of an out-of-scope change makes the iteration worse.
