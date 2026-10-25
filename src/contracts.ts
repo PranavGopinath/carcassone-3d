@@ -356,6 +356,22 @@ export const REQUIRED_SHOTS = [
 
 export type ShotName = (typeof REQUIRED_SHOTS)[number];
 
+export interface AuditMark {
+  shot: string;
+  x: number;
+  y: number;
+  label: string;
+}
+
+export interface ViewConsistencyEntry {
+  tileKey: string;
+  specId: string;
+  rotation: Rotation;
+  features2d: string[];
+  features3d: string[];
+  mismatches: string[];
+}
+
 export interface AuditReport {
   ok: boolean;
   floatingProps: number;
@@ -364,6 +380,18 @@ export interface AuditReport {
   ungroundedMeeples: number;
   waterSeamMismatches: number;
   webglWarnings: number;
+  hudMatchesState?: boolean;
+  viewConsistency?: {
+    ok: boolean;
+    tiles: ViewConsistencyEntry[];
+    mismatches: string[];
+  };
+  marks?: {
+    floatingProps: AuditMark[];
+    ungroundedMeeples: AuditMark[];
+    tileLabels: AuditMark[];
+    [key: string]: AuditMark[];
+  };
   details: string[];
 }
 
@@ -372,13 +400,17 @@ export interface InspectorAPI {
   getState(): GameState;
   getLegalMoves(rotation?: Rotation): LegalMove[];
   applyMove(move: Move): GameState;
+  botMove(): GameState;
+  showLegalMoves(on: boolean): void;
   runReplay(moves: Move[]): GameState;
-  setView(mode: ViewMode): void;
+  setView(mode: ViewMode, instant?: boolean): void;
   getView(): ViewMode;
   setQuality(quality: QualityMode): void;
   setTheme(theme: ThemeMode): void;
   startDemo(): Promise<void>;
   renderAt(tSeconds: number): void;
+  playAt(tSeconds: number): void;
+  injectDefect(name: string | null): void;
   listShots(): ShotName[];
   captureShot(name: ShotName): string;
   getTileSheet(): HTMLCanvasElement;

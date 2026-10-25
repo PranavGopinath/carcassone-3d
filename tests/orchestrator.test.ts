@@ -9,6 +9,9 @@ import {
   validateOwnership,
   buildWaves,
   runOrchestrator,
+  callModel,
+  runToolLoop,
+  loadTraceState,
 } from '../scripts/lib/orchestrator.mjs';
 
 function createTempWorkspace() {
@@ -208,5 +211,186 @@ describe('Subagent Orchestrator (Prompt 0)', () => {
       thinking: 'high',
       status: 'ok',
     });
+  });
+
+  it('cancels background interaction past pollTimeoutMs deadline and retries with backoff', async () => {
+    const tracePath = path.join(tmpDir, 'runs/orchestrator/trace.jsonl');
+    const cancelledIds: string[] = [];
+    let createCalls = 0;
+
+    const fakeAiClient = {
+      interactions: {
+        create: async (payload: any) => {
+          createCalls += 1;
+          expect(payload.background).toBe(true);
+          if (createCalls === 1) {
+            return { id: 'stuck_int_1', status: 'in_progress' };
+          }
+          return {
+            id: 'recovered_int_2',
+            status: 'completed',
+            output_text: '{"ok":true}',
+            usage: { total_input_tokens: 120, total_output_tokens: 60 },
+          };
+        },
+        get: async (id: string) => {
+          return { id, status: 'in_progress' };
+        },
+        cancel: async (id: string) => {
+          cancelledIds.push(id);
+          return { id, status: 'cancelled' };
+        },
+      },
+    };
+
+    const res = await callModel({
+      role: 'judge_a',
+      model: 'gemini-4-argon',
+      thinking: 'high',
+      input: 'Grade clip',
+      taskId: 'deadline_test',
+      pollTimeoutMs: 60,
+      pollInitialMs: 15,
+      retryBaseMs: 10,
+      rootDir: tmpDir,
+      tracePath,
+      aiClient: fakeAiClient,
+    });
+
+    expect(createCalls).toBe(2);
+    expect(cancelledIds).toEqual(['stuck_int_1']);
+    expect(res.interactionId).toBe('recovered_int_2');
+    expect(res.output).toEqual({ ok: true });
+  });
+
+  it('initializes cumulative spend and call count from trace.jsonl across processes', async () => {
+    const tracePath = path.join(tmpDir, 'runs/orchestrator/trace.jsonl');
+
+    // Process 1 spends $0.04
+    await callModel({
+      role: 'lead_architect',
+      model: 'gemini-4-argon',
+      thinking: 'high',
+      input: 'Call 1',
+      taskId: 'proc1_call',
+      rootDir: tmpDir,
+      tracePath,
+      fakeHandler: async () => ({
+        interactionId: 'int_proc1',
+        inputTokens: 10_000, // $0.02
+        outputTokens: 2_000, // $0.02 -> $0.04
+        output: { ok: 1 },
+      }),
+    });
+
+    const loaded = loadTraceState(tracePath);
+    expect(loaded.totalCalls).toBe(1);
+    expect(loaded.totalCostUsd).toBe(0.04);
+
+    // Process 2 with a fresh state object and budgetUsd = $0.06 should fail on another $0.04 call ($0.04 + $0.04 = $0.08 > $0.06)
+    await expect(
+      callModel({
+        role: 'lead_architect',
+        model: 'gemini-4-argon',
+        thinking: 'high',
+        input: 'Call 2',
+        taskId: 'proc2_call',
+        rootDir: tmpDir,
+        tracePath,
+        budgetUsd: 0.06,
+        fakeHandler: async () => ({
+          interactionId: 'int_proc2',
+          inputTokens: 10_000,
+          outputTokens: 2_000,
+          output: { ok: 2 },
+        }),
+      })
+    ).rejects.toThrow(/Budget cap/);
+  });
+
+  it('runs multi-turn runToolLoop until finish or maxToolCalls and traces every turn', async () => {
+    const tracePath = path.join(tmpDir, 'runs/orchestrator/trace.jsonl');
+    const executedCalls: Array<{ name: string; arguments: any }> = [];
+
+    const tools = [
+      {
+        type: 'function',
+        name: 'read_file',
+        description: 'Read a file',
+        parameters: { type: 'object', properties: { path: { type: 'string' } } },
+      },
+      {
+        type: 'function',
+        name: 'edit_file',
+        description: 'Edit a file',
+        parameters: { type: 'object', properties: { path: { type: 'string' } } },
+      },
+      {
+        type: 'function',
+        name: 'finish',
+        description: 'Finish patch',
+        parameters: { type: 'object', properties: { summary: { type: 'string' } } },
+      },
+    ];
+
+    const res = await runToolLoop({
+      role: 'patcher',
+      model: 'gemini-4-argon',
+      thinking: 'high',
+      tools,
+      input: 'Fix bug D1',
+      taskId: 'patch_iter1',
+      maxToolCalls: 5,
+      rootDir: tmpDir,
+      tracePath,
+      fakeToolScript: [
+        [{ name: 'read_file', arguments: { path: 'src/render/renderer.ts' } }],
+        [{ name: 'edit_file', arguments: { path: 'src/render/renderer.ts', search: 'a', replace: 'b' } }],
+        [
+          {
+            name: 'finish',
+            arguments: {
+              summary: 'Fixed prop grounding',
+              addressed: [{ defectId: 'still-O3-3d-1', files: ['src/render/renderer.ts'], change: 'Grounded prop', verified: 'both' }],
+            },
+          },
+        ],
+      ],
+      executeTool: async (call: any) => {
+        executedCalls.push({ name: call.name, arguments: call.arguments });
+        if (call.name === 'read_file') return '1: const a = 1;';
+        if (call.name === 'edit_file') return { ok: true };
+        return call.arguments;
+      },
+    });
+
+    expect(res.finished).toBe(true);
+    expect(res.finishReason).toBe('finish');
+    expect(res.report.summary).toBe('Fixed prop grounding');
+    expect(executedCalls).toHaveLength(3);
+    expect(res.state.totalCalls).toBe(3);
+
+    // Also verify maxToolCalls cap stops the loop
+    const cappedRes = await runToolLoop({
+      role: 'patcher',
+      model: 'gemini-4-argon',
+      thinking: 'high',
+      tools,
+      input: 'Infinite calls',
+      taskId: 'patch_capped',
+      maxToolCalls: 2,
+      rootDir: tmpDir,
+      tracePath,
+      fakeToolScript: [
+        [{ name: 'read_file', arguments: { path: 'a.ts' } }],
+        [{ name: 'read_file', arguments: { path: 'b.ts' } }],
+        [{ name: 'read_file', arguments: { path: 'c.ts' } }],
+      ],
+      executeTool: async () => 'ok',
+    });
+
+    expect(cappedRes.finished).toBe(false);
+    expect(cappedRes.finishReason).toBe('max_tool_calls');
+    expect(cappedRes.toolCallsCount).toBe(2);
   });
 });

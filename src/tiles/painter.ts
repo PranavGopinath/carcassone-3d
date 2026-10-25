@@ -971,22 +971,27 @@ function drawMeadowTreesAndHamlets(
 
   // 4 corner quadrants: NW (3,0), NE (0,1), SE (1,2), SW (2,3)
   const quadrants: Array<{ qx: number; qy: number; sideA: DirIndex; sideB: DirIndex; idx: number }> = [
-    { qx: size * 0.2, qy: size * 0.2, sideA: 3, sideB: 0, idx: 0 },
-    { qx: size * 0.8, qy: size * 0.2, sideA: 0, sideB: 1, idx: 1 },
-    { qx: size * 0.8, qy: size * 0.8, sideA: 1, sideB: 2, idx: 2 },
-    { qx: size * 0.2, qy: size * 0.8, sideA: 2, sideB: 3, idx: 3 },
+    { qx: size * 0.19, qy: size * 0.19, sideA: 3, sideB: 0, idx: 0 },
+    { qx: size * 0.81, qy: size * 0.19, sideA: 0, sideB: 1, idx: 1 },
+    { qx: size * 0.81, qy: size * 0.81, sideA: 1, sideB: 2, idx: 2 },
+    { qx: size * 0.19, qy: size * 0.81, sideA: 2, sideB: 3, idx: 3 },
+  ];
+
+  const treeOffsets = [
+    { du: -0.045, dv: -0.035, radScale: 0.032 },
+    { du: 0.04, dv: -0.025, radScale: 0.036 },
+    { du: -0.015, dv: 0.045, radScale: 0.028 },
   ];
 
   for (const q of quadrants) {
     if (edges[q.sideA] === 'CITY' || edges[q.sideB] === 'CITY') continue;
 
-    // Draw a cluster of 2-3 lush tree canopies in open meadow corners (matching Design_of_game.jpeg)
-    for (let t = 0; t < 3; t++) {
-      const ox = (hash01(spec.id, q.idx * 10 + t * 2) - 0.5) * size * 0.12;
-      const oy = (hash01(spec.id, q.idx * 10 + t * 2 + 1) - 0.5) * size * 0.12;
-      const tx = q.qx + ox;
-      const ty = q.qy + oy;
-      const rad = size * (0.026 + (t % 2) * 0.01);
+    // Draw a cluster of 3 lush tree canopies in open meadow corners matching 3D grove positions
+    for (let t = 0; t < treeOffsets.length; t++) {
+      const to = treeOffsets[t];
+      const tx = q.qx + to.du * size;
+      const ty = q.qy + to.dv * size;
+      const rad = size * to.radScale;
 
       // Canopy cast shadow
       ctx.fillStyle = 'rgba(24, 46, 16, 0.38)';
@@ -1007,18 +1012,18 @@ function drawMeadowTreesAndHamlets(
       ctx.fill();
     }
 
-    // If adjacent to a ROAD and not WATER/LAKE/CLOISTER, add a tiny roadside cottage roof
+    // If adjacent to a ROAD and not WATER/LAKE/CLOISTER, add a roadside cottage roof in quadrants 1 and 2 (matching 3D)
     const hasRoad = edges[q.sideA] === 'ROAD' || edges[q.sideB] === 'ROAD';
     const hasWater = edges[q.sideA] === 'WATER' || edges[q.sideB] === 'WATER';
-    if (hasRoad && !hasWater && spec.special !== 'CLOISTER' && q.idx % 2 === 1) {
-      const hx = size * 0.5 + (q.qx - size * 0.5) * 0.52;
-      const hy = size * 0.5 + (q.qy - size * 0.5) * 0.52;
-      const cw = size * 0.068;
-      const ch = size * 0.048;
+    if (hasRoad && !hasWater && spec.special !== 'CLOISTER' && (q.idx === 1 || q.idx === 2)) {
+      const hx = size * 0.5 + (q.qx - size * 0.5) * 0.56;
+      const hy = size * 0.5 + (q.qy - size * 0.5) * 0.56;
+      const cw = size * 0.088;
+      const ch = size * 0.074;
 
       ctx.save();
       ctx.translate(hx, hy);
-      ctx.rotate(q.idx * 0.55);
+      ctx.rotate(q.idx * 0.7);
       ctx.fillStyle = 'rgba(28, 18, 12, 0.35)';
       ctx.fillRect(-cw / 2 + size * 0.006, -ch / 2 + size * 0.006, cw, ch);
       ctx.fillStyle = '#cf5f36';
@@ -1113,14 +1118,54 @@ export function createTileSheet(
 
   const rotations: Rotation[] = [0, 1, 2, 3];
 
-  DECK.forEach((spec, rowIdx) => {
-    rotations.forEach((rot, colIdx) => {
-      paintTile(subCtx, spec, rot, tileSize);
-      const x = pad + colIdx * (tileSize + pad);
-      const y = pad + rowIdx * (tileSize + pad);
-      ctx.drawImage(subCanvas as unknown as CanvasImageSource, x, y);
+    DECK.forEach((spec, rowIdx) => {
+      rotations.forEach((rot, colIdx) => {
+        paintTile(subCtx, spec, rot, tileSize);
+        const x = pad + colIdx * (tileSize + pad);
+        const y = pad + rowIdx * (tileSize + pad);
+        ctx.drawImage(subCanvas as unknown as CanvasImageSource, x, y);
+      });
     });
-  });
 
-  return sheet;
+    return sheet;
+  }
+
+export function get2DTileFeatureSummary(spec: TileSpec, rotation: Rotation): string[] {
+  const edges = getRotatedEdges(spec, rotation);
+  const features: string[] = [];
+
+  for (let s = 0 as DirIndex; s < 4; s = (s + 1) as DirIndex) {
+    if (edges[s] === 'CITY') features.push(`city-sector-${s}`);
+  }
+  if (
+    spec.special === 'WATERFALL_BRIDGE' ||
+    spec.special === 'BRIDGE_FLAT' ||
+    spec.special === 'BRIDGE_HILL'
+  ) {
+    features.push(`bridge-${spec.id}`);
+  }
+  if (spec.special === 'WATERFALL_BRIDGE' || spec.special === 'WATERFALL') {
+    features.push(`waterfall-${spec.id}`);
+  }
+  if (spec.special === 'CLOISTER') {
+    features.push('cloister-monastery');
+  }
+
+  const quadrants: Array<{ sideA: DirIndex; sideB: DirIndex; idx: number }> = [
+    { sideA: 3, sideB: 0, idx: 0 },
+    { sideA: 0, sideB: 1, idx: 1 },
+    { sideA: 1, sideB: 2, idx: 2 },
+    { sideA: 2, sideB: 3, idx: 3 },
+  ];
+  for (const q of quadrants) {
+    if (edges[q.sideA] === 'CITY' || edges[q.sideB] === 'CITY') continue;
+    features.push(`meadow-grove-${q.idx}`);
+    const hasRoad = edges[q.sideA] === 'ROAD' || edges[q.sideB] === 'ROAD';
+    const hasWater = edges[q.sideA] === 'WATER' || edges[q.sideB] === 'WATER';
+    if (hasRoad && !hasWater && spec.special !== 'CLOISTER' && (q.idx === 1 || q.idx === 2)) {
+      features.push(`cottage-q${q.idx}`);
+    }
+  }
+
+  return features;
 }
