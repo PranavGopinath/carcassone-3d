@@ -20,6 +20,12 @@ Before writing loop code, read `scripts/lib/orchestrator.mjs` and add whatever o
 1. **Deadlines.** Long or `thinking: "high"` calls run with `background: true` and poll `ai.interactions.get(id)` with exponential backoff under a hard per-call deadline (`pollTimeoutMs`, default 90s, configurable per call). A call past its deadline is cancelled and retried with backoff like a 429/5xx; it never hangs the process.
 2. **Persistent spend.** Initialize cumulative cost and call counts from `runs/orchestrator/trace.jsonl`, so budget caps hold across processes.
 3. **`runToolLoop({ role, tools, input, maxToolCalls, deadlineMs, previousInteractionId })`.** A function-calling loop on the Interactions API: send the tool declarations, execute each returned function call through the caller's handler, return the result, and repeat until the model calls `finish` or a cap is hit. Each turn is traced and metered. Under `ORCH_FAKE=1` it replays scripted tool-call sequences so the patcher is testable offline.
+4. **Rate limits (429 / `RESOURCE_EXHAUSTED`).** Quota errors are expected on a long run and must never end it:
+   - **Pace before hitting the limit.** A shared client-side limiter, per model, enforces the config's `rateLimits` (`rpm`, `tpm`, `maxConcurrent`) across every judge, pairwise, patcher and escalation call in the process, estimating input tokens before sending.
+   - **Retry 429s separately from other errors.** Wait for the server's retry delay (`RetryInfo.retryDelay` in the error details, or `Retry-After`) when given, otherwise exponential backoff with jitter capped at `rateLimits.maxBackoffMs`. Keep retrying for up to `rateLimits.maxWaitMs` per call. 429 retries don't count toward the retry limit for 5xx and timeouts. When a 429 arrives, the limiter lowers that model's pace for every caller, not just the one that failed.
+   - **Never downgrade** the model or thinking level to get around a quota (hard rule 6).
+   - **Quota still exhausted after `maxWaitMs`** (usually a daily quota): checkpoint and exit cleanly with a `rate_limited` status and the resume command. Nothing is lost (§4).
+   - Trace every 429 as `status: "rate_limited"` with the wait time, and show total rate-limit wait on the dashboard.
 
 The loop runs with **no human in it**. Implement the whole spec; where something is hard (the golden set, the patcher's tool loop, tie-breaks), build the real thing rather than a stub that makes a check pass.
 
@@ -31,7 +37,7 @@ The loop runs with **no human in it**. Implement the whole spec; where something
 4. **The rubric is the goal, and it has two kinds of item** (see §2). `defect` items ask "is something broken?"; `fidelity` items ask "how far is this from the reference?". The loop is not done while either kind has open failures. Passing every defect item on art that looks nothing like the references is not success.
 5. **`GEMINI_API_KEY` is read only by Node** (`node --env-file=.env`). Never use a `VITE_` prefix and never log it.
 6. **High effort everywhere.** Every judge, pairwise, patcher and escalation call uses `gemini-4-argon` with `thinking: "high"` and media at `media_resolution` high. Pass both explicitly on each call. Don't downgrade to save budget; the budget cap ends the run instead.
-7. **Nothing blocks.** No stdin prompts, no waiting on a person. Every model call has a deadline (§0.1). A stalled call is cancelled and retried; it never hangs the run.
+7. **Nothing blocks.** No stdin prompts, no waiting on a person. Every model call has a deadline (§0.1). A stalled call is cancelled and retried; it never hangs the run. Rate limits slow the run down; they never end it while a resume is possible (§0.4).
 8. **Never trust model-invented IDs as keys.** Defect IDs are assigned by code when verdicts are merged: `<judge>-<itemId>-<n>` (e.g. `still-M2-1`).
 9. **Every view, every iteration.** Each iteration captures and judges every view in `views` (e.g. `2d` and `3d`): the gameplay scripts in each view, and at least one canvas shot and one page shot per view. An item with `views` is judged separately in each view and passes only if it passes in all of them. Never skip a view to save time or budget.
 10. **Gameplay is graded, not just the cinematic.** The loop drives real game actions and real UI clicks through scripted timelines (§1.6). A render that looks right in a fixed camera flight but breaks when a tile is placed, a score changes or the view is toggled has not passed.
@@ -144,7 +150,7 @@ The patcher is a **tool-using agent working inside the run's worktree**, not a s
 ## 4. Loop: `run.mjs`
 
 ```
-node --env-file=.env scripts/loop/run.mjs [--max-iterations N] [--budget-usd X] [--notes "..."]
+node --env-file=.env scripts/loop/run.mjs [--max-iterations N] [--budget-usd X] [--notes "..."] [--resume <runId>]
 ```
 
 1. Work in worktree `wt/loop-<runId>` on branch `loop/<runId>`, from the config's `baseBranch` at its current tip, using the orchestrator's worktree helpers. Record `startCommit`.
@@ -155,6 +161,7 @@ node --env-file=.env scripts/loop/run.mjs [--max-iterations N] [--budget-usd X] 
    - **Tie or worse:** `git reset --hard <bestCommit>` and add the attempted defects to `triedLedger`. If the same defect has failed twice, tell the patcher to try a structurally different fix.
 4. **Escalation, not a human gate.** After `limits.plateauIterations` non-improving iterations in a row, call `lead_architect` with the rubric history, `triedLedger`, best shots next to their references, and the file outline. It returns a diagnosis and a structural plan (refactors, new modules, a different technique). The next patcher iteration gets that plan and `patcher.escalatedMaxToolCalls`. If the escalated iteration also fails to improve, stop.
 5. **Stop** when every item passes, `maxIterations` is reached, the budget is spent, or escalation fails.
+   **Checkpoint and resume.** After each phase (bootstrap, golden set, patch, gate, capture, judge, compare), write `runs/loop/<runId>/state.json`: current iteration and phase, best commit and iteration, `triedLedger`, plateau count, escalation plan and verdicts so far. `--resume <runId>` reopens the worktree, restores that state, and continues from the first unfinished phase without repeating finished model calls. An exit for rate limits (§0.4) prints this command.
 6. **Finish automatically.** If the best iteration is strictly better than iteration 0, merge it into `baseBranch` locally with `--no-ff` (never push) and remove the worktree. Other people may have committed to `baseBranch` during the run: if the merge conflicts, abort it, leave `loop/<runId>` unmerged and list the conflicting files in the summary. Otherwise leave the branch unmerged. Either way, write `runs/loop/<runId>/summary.json` (per-iteration rubric counts, best iteration, open defects, cost, merge result) and print it.
 
 ## 5. Dashboard
@@ -182,6 +189,7 @@ Use a fake scene, `tests/fixtures/loop-scene.html`: a cube with the hooks.
 12. A failing `reportOnly` item appears in the summary but never becomes a patcher defect and never changes the pass count.
 13. Unknown fixture names and steps that change nothing are recorded as `stepErrors`; a false `expect` names its expression.
 14. `frameDiff` ignores an instant HUD text change outside the canvas but catches the same change inside it.
+15. A fake model returning 429 with a `retryDelay` waits that long and then succeeds; 429s don't use up the 5xx retry count; concurrent calls share one limiter; a 429 lasting past `maxWaitMs` exits with `rate_limited`, and `--resume` continues from the saved phase without repeating finished calls.
 
 ## Definition of done
 
