@@ -14,7 +14,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+/lib/
+!scripts/lib/
 lib64/
 parts/
 sdist/
@@ -222,6 +223,7 @@ __marimo__/
 # Node / Vite
 node_modules/
 .vite/
+wt/
 
 # Loop output (videos get big)
 runs/
