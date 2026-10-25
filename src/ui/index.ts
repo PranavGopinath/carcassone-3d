@@ -247,8 +247,21 @@ export function createGameUI(container: HTMLElement, actions: UIActions) {
     <div class="ui-winner-announcement" id="ui-winner-text">Player 1 Wins!</div>
     <div class="ui-final-scores" id="ui-final-scores"></div>
     <button class="ui-rotate-pill-btn" id="ui-restart-btn">Play Again</button>
+    <button class="ui-modal-view-btn" id="ui-view-board-btn">View Board</button>
   `;
   modalBackdrop.appendChild(modalCard);
+
+  // Closing the modal lets the player inspect the finished board; Play Again moves to the top bar.
+  let endModalDismissed = false;
+  const dismissEndModal = () => {
+    endModalDismissed = true;
+    modalBackdrop.style.display = 'none';
+    demoBtn.innerText = 'Play Again';
+  };
+  modalBackdrop.addEventListener('click', (e) => {
+    if (e.target === modalBackdrop) dismissEndModal();
+  });
+  modalCard.querySelector('#ui-view-board-btn')?.addEventListener('click', dismissEndModal);
 
   rootElement.appendChild(turnIndicator);
   rootElement.appendChild(topCenterBar);
@@ -471,7 +484,7 @@ export function createGameUI(container: HTMLElement, actions: UIActions) {
 
       // 7. End Game Modal
       if (state.gameOver) {
-        modalBackdrop.style.display = 'flex';
+        modalBackdrop.style.display = endModalDismissed ? 'none' : 'flex';
         const winnerText = document.getElementById('ui-winner-text');
         const finalScores = document.getElementById('ui-final-scores');
         const restartBtn = document.getElementById('ui-restart-btn');
@@ -520,6 +533,8 @@ export function createGameUI(container: HTMLElement, actions: UIActions) {
           };
         }
       } else {
+        endModalDismissed = false;
+        demoBtn.innerText = 'Auto Demo';
         modalBackdrop.style.display = 'none';
       }
     },
