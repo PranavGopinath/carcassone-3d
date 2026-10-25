@@ -9,23 +9,42 @@
     "items": {
       "type": "array",
       "items": {
-        "type": "object",
+  "type": "object",
         "required": ["id", "verdict", "evidence"],
         "properties": {
-          "id": { "type": "string" },
+          "id": { "type": "string", "description": "Rubric item id" },
           "verdict": { "enum": ["pass", "fail", "uncertain"] },
           "evidence": { "type": "string" },
           "t": { "type": "string", "description": "MM:SS" },
           "shot": { "type": "string" },
-          "markId": { "type": "integer" }
+          "markId": { "type": "integer" },
+          "gaps": {
+      "type": "array",
+            "description": "Fidelity items only: visible differences from the reference for this aspect, most severe first",
+            "items": {
+  "type": "object",
+              "required": ["rank", "severity", "description", "region"],
+              "properties": {
+                "rank": { "type": "integer", "minimum": 1 },
+          "severity": { "enum": ["high", "medium", "low"] },
+                "description": {
+                  "type": "string",
+                  "description": "What the reference has that the render lacks, or vice versa"
+                },
+                "region": { "type": "string", "description": "Where in the render, e.g. 'left third, cliff faces'" }
+              }
+            }
+          },
+          "view": { "type": "string", "description": "View this verdict applies to, e.g. '2d' or '3d'" }
         }
       }
     },
     "defects": {
       "type": "array",
+      "description": "Defect-item failures. IDs here are local; the loop reassigns global IDs when merging.",
       "items": {
-        "type": "object",
-        "required": ["id", "itemIds", "severity", "description"],
+  "type": "object",
+        "required": ["itemIds", "severity", "description"],
         "properties": {
           "id": { "type": "string" },
           "itemIds": { "type": "array", "items": { "type": "string" } },
@@ -34,7 +53,8 @@
           "shot": { "type": "string" },
           "markId": { "type": "integer" },
           "description": { "type": "string" },
-          "suspectedArea": { "type": "string" }
+          "suspectedArea": { "type": "string" },
+          "view": { "type": "string", "description": "View this verdict applies to, e.g. '2d' or '3d'" }
         }
       }
     }
