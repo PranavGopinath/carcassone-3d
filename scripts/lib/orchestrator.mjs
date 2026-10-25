@@ -6,6 +6,7 @@ import { checkImportBoundaries } from '../gates/imports.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ROOT = path.resolve(__dirname, '../..');
+const INTERACTIONS_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 
 export function loadRoles(rootDir = DEFAULT_ROOT) {
   const raw = fs.readFileSync(path.join(rootDir, 'agents/roles.json'), 'utf8');
@@ -26,6 +27,70 @@ export function computeCostUsd(model, inputTokens, outputTokens, pricing) {
   const outRate = typeof rate?.outputPerMillion === 'number' ? rate.outputPerMillion : 0;
   const cost = (Number(inputTokens || 0) / 1_000_000) * inRate + (Number(outputTokens || 0) / 1_000_000) * outRate;
   return Number.isFinite(cost) ? Number(cost.toFixed(6)) : 0;
+}
+
+/**
+ * Reads cumulative spend and call count from `tracePath` (`runs/orchestrator/trace.jsonl`)
+ * so budget and call caps persist across processes.
+ */
+export function loadPersistentSpend(tracePath) {
+  let totalCostUsd = 0;
+  let totalCalls = 0;
+  if (!tracePath || !fs.existsSync(tracePath)) {
+    return { totalCostUsd: 0, totalCalls: 0 };
+  }
+  try {
+    const raw = fs.readFileSync(tracePath, 'utf8');
+    const lines = raw.split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const entry = JSON.parse(trimmed);
+        if (entry && entry.status === 'ok') {
+          const c = Number(entry.costUsd || 0);
+          if (Number.isFinite(c)) {
+            totalCostUsd = Number((totalCostUsd + c).toFixed(6));
+          }
+          totalCalls += 1;
+        }
+      } catch {
+        // Ignore malformed trace line
+      }
+    }
+  } catch {
+    // Ignore read error
+  }
+  return { totalCostUsd, totalCalls };
+}
+
+/**
+ * Ensures `state` is initialized once from `tracePath` so cumulative spend holds across processes
+ * without double-counting calls made within the same `state` object in the current process.
+ */
+export function ensurePersistentSpendState(state, tracePath) {
+  const target = state || { totalCostUsd: 0, totalCalls: 0 };
+  if (typeof target.totalCostUsd !== 'number' || Number.isNaN(target.totalCostUsd)) {
+    target.totalCostUsd = 0;
+  }
+  if (typeof target.totalCalls !== 'number' || Number.isNaN(target.totalCalls)) {
+    target.totalCalls = 0;
+  }
+  if (!target._loadedTracePaths) {
+    Object.defineProperty(target, '_loadedTracePaths', {
+      value: new Set(),
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    });
+  }
+  if (tracePath && !target._loadedTracePaths.has(tracePath)) {
+    const persisted = loadPersistentSpend(tracePath);
+    target.totalCostUsd = Number((target.totalCostUsd + persisted.totalCostUsd).toFixed(6));
+    target.totalCalls += persisted.totalCalls;
+    target._loadedTracePaths.add(tracePath);
+  }
+  return target;
 }
 
 const PROTECTED_PREFIXES = ['tests/', 'rubric/', 'scripts/gates/'];
@@ -126,29 +191,175 @@ async function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function sanitizeResponseSchema(schema) {
+  if (!schema || typeof schema !== 'object') return undefined;
+  const clone = JSON.parse(JSON.stringify(schema));
+  delete clone.$schema;
+  delete clone.title;
+  return clone;
+}
+
+function normalizeWireInput(input, defaultMediaResolution = 'high') {
+  if (typeof input === 'string') return input;
+  if (Array.isArray(input)) {
+    return input.map((item) => {
+      if (!item || typeof item !== 'object') return { type: 'text', text: String(item) };
+      if (item.type === 'text') {
+        return { type: 'text', text: String(item.text ?? '') };
+      }
+      if (item.type === 'image') {
+        const res = item.resolution || item.media_resolution || item.mediaResolution || defaultMediaResolution;
+        const out = {
+          type: 'image',
+          mime_type: item.mime_type || item.mimeType || 'image/png',
+          ...(res ? { resolution: res } : {}),
+        };
+        if (item.data) out.data = item.data;
+        if (item.uri) out.uri = item.uri;
+        return out;
+      }
+      if (item.type === 'video') {
+        const res = item.resolution || item.media_resolution || item.mediaResolution || defaultMediaResolution;
+        const out = {
+          type: 'video',
+          mime_type: item.mime_type || item.mimeType || 'video/webm',
+          ...(res ? { resolution: res } : {}),
+        };
+        if (item.uri) out.uri = item.uri;
+        if (item.data) out.data = item.data;
+        return out;
+      }
+      if (item.type === 'function_result') {
+        return {
+          type: 'function_result',
+          call_id: item.call_id || item.callId || item.id,
+          name: item.name,
+          result: item.result ?? { ok: true },
+        };
+      }
+      return item;
+    });
+  }
+  return JSON.stringify(input);
+}
+
+function extractInteractionParts(interaction) {
+  const steps = Array.isArray(interaction?.steps) ? interaction.steps : [];
+  const functionCalls = [];
+  const textParts = [];
+
+  for (const step of steps) {
+    if (step.type === 'function_call') {
+      functionCalls.push({
+        id: step.id || `call_${functionCalls.length + 1}`,
+        name: step.name,
+        arguments: step.arguments || step.args || {},
+      });
+    } else if (step.type === 'model_output' && Array.isArray(step.content)) {
+      for (const c of step.content) {
+        if (c.type === 'text' && typeof c.text === 'string') {
+          textParts.push(c.text);
+        } else if (c.type === 'function_call') {
+          functionCalls.push({
+            id: c.id || `call_${functionCalls.length + 1}`,
+            name: c.name,
+            arguments: c.arguments || c.args || {},
+          });
+        }
+      }
+    }
+  }
+
+  if (Array.isArray(interaction?.functionCalls)) {
+    for (const fc of interaction.functionCalls) {
+      functionCalls.push({
+        id: fc.id || `call_${functionCalls.length + 1}`,
+        name: fc.name,
+        arguments: fc.arguments || fc.args || {},
+      });
+    }
+  }
+
+  const combinedText =
+    textParts.join('\n').trim() ||
+    interaction?.output_text ||
+    interaction?.text ||
+    (interaction?.output ? JSON.stringify(interaction.output) : '');
+
+  let parsed = null;
+  if (combinedText) {
+    try {
+      const clean = combinedText
+        .replace(/^```json\s*/i, '')
+        .replace(/^```\s*/i, '')
+        .replace(/```\s*$/, '')
+        .trim();
+      parsed = JSON.parse(clean);
+    } catch {
+      parsed = { files: [], notes: combinedText, board: [], text: combinedText };
+    }
+  } else if (functionCalls.length > 0) {
+    parsed = { functionCalls };
+  } else {
+    parsed = { files: [], notes: '', board: [] };
+  }
+
+  if (parsed && typeof parsed === 'object' && functionCalls.length > 0) {
+    parsed.functionCalls = functionCalls;
+  }
+
+  const usage = interaction?.usage || {};
+  const inputTokens = Number(usage.total_input_tokens ?? usage.input_tokens ?? interaction?.inputTokens ?? 350);
+  const outputTokens = Number(
+    (usage.total_output_tokens ?? usage.output_tokens ?? interaction?.outputTokens ?? 220) +
+      (usage.total_thought_tokens ?? 0)
+  );
+
+  return {
+    interactionId: interaction?.id || interaction?.interactionId || `live_${Date.now()}`,
+    inputTokens,
+    outputTokens,
+    output: parsed,
+    functionCalls,
+    text: combinedText,
+    raw: interaction,
+  };
+}
+
 export async function callModel({
   role,
-  model,
+  model = 'gemini-4-argon',
   thinking = 'medium',
+  mediaResolution = undefined,
+  media_resolution = undefined,
   input,
+  tools = undefined,
   taskId = 'adhoc',
   background = false,
+  pollTimeoutMs = 90_000,
+  pollIntervalMs = 250,
+  retryBackoffMs = 50,
+  maxRetries = 3,
   maxOutputTokens = 65536,
   previousInteractionId = undefined,
   schema = undefined,
   rootDir = DEFAULT_ROOT,
   tracePath = path.join(rootDir, 'runs/orchestrator/trace.jsonl'),
-  state = { totalCostUsd: 0, totalCalls: 0 },
+  state = undefined,
   budgetUsd = Infinity,
   maxCalls = Infinity,
   fakeHandler = undefined,
+  interactionsClient = undefined,
 }) {
   const pricing = loadPricing(rootDir);
+  const spendState = ensurePersistentSpendState(state, tracePath);
+  const effectiveMediaResolution = mediaResolution || media_resolution || (thinking === 'high' ? 'high' : undefined);
+  const effectiveBackground = Boolean(background || thinking === 'high');
 
-  if (state.totalCalls + 1 > maxCalls || state.totalCostUsd >= budgetUsd) {
+  if (spendState.totalCalls + 1 > maxCalls || spendState.totalCostUsd >= budgetUsd) {
     const resumeCmd = `node scripts/smoke-orchestrator.mjs --resume --task ${taskId}`;
     const err = new Error(
-      `Spend/call cap reached before task '${taskId}' (calls=${state.totalCalls}/${maxCalls}, cost=$${state.totalCostUsd.toFixed(4)}/$${budgetUsd}). Resume with: ${resumeCmd}`
+      `Spend/call cap reached before task '${taskId}' (calls=${spendState.totalCalls}/${maxCalls}, cost=$${spendState.totalCostUsd.toFixed(4)}/$${budgetUsd}). Resume with: ${resumeCmd}`
     );
     err.code = 'SPEND_CAP_EXCEEDED';
     err.resumeCommand = resumeCmd;
@@ -157,34 +368,50 @@ export async function callModel({
 
   const startMs = Date.now();
   let attempt = 0;
-  const maxRetries = 3;
 
   while (true) {
     try {
       let response;
-      if (process.env.ORCH_FAKE === '1' || typeof fakeHandler === 'function') {
+      if (
+        !interactionsClient &&
+        (process.env.ORCH_FAKE === '1' || typeof fakeHandler === 'function')
+      ) {
         const handler = fakeHandler || defaultFakeHandler;
-        response = await handler({
-          role,
-          model,
-          thinking,
-          input,
-          taskId,
-          background,
-          maxOutputTokens,
-          previousInteractionId,
-          schema,
-          attempt,
-        });
+        response = await runWithDeadline(
+          () =>
+            handler({
+              role,
+              model,
+              thinking,
+              mediaResolution: effectiveMediaResolution,
+              media_resolution: effectiveMediaResolution,
+              input,
+              tools,
+              taskId,
+              background: effectiveBackground,
+              pollTimeoutMs,
+              maxOutputTokens,
+              previousInteractionId,
+              schema,
+              attempt,
+            }),
+          pollTimeoutMs,
+          `fake_${taskId}_${attempt}`
+        );
       } else {
         response = await invokeLiveInteractionsApi({
           model,
           thinking,
+          mediaResolution: effectiveMediaResolution,
           input,
-          background,
+          tools,
+          background: effectiveBackground,
+          pollTimeoutMs,
+          pollIntervalMs,
           maxOutputTokens,
           previousInteractionId,
           schema,
+          interactionsClient,
         });
       }
 
@@ -192,26 +419,32 @@ export async function callModel({
       const outputTokens = Number(response.outputTokens ?? 180);
       const costUsd = computeCostUsd(model, inputTokens, outputTokens, pricing);
 
-      if (state.totalCostUsd + costUsd > budgetUsd) {
+      if (spendState.totalCostUsd + costUsd > budgetUsd) {
         const resumeCmd = `node scripts/smoke-orchestrator.mjs --resume --task ${taskId}`;
         const err = new Error(
-          `Budget cap ($${budgetUsd}) exceeded on task '${taskId}' (projected $${(state.totalCostUsd + costUsd).toFixed(4)}). Resume with: ${resumeCmd}`
+          `Budget cap ($${budgetUsd}) exceeded on task '${taskId}' (projected $${(spendState.totalCostUsd + costUsd).toFixed(4)}). Resume with: ${resumeCmd}`
         );
         err.code = 'SPEND_CAP_EXCEEDED';
         err.resumeCommand = resumeCmd;
         throw err;
       }
 
-      state.totalCalls += 1;
-      state.totalCostUsd = Number((state.totalCostUsd + costUsd).toFixed(6));
+      spendState.totalCalls += 1;
+      spendState.totalCostUsd = Number((spendState.totalCostUsd + costUsd).toFixed(6));
 
-      const interactionId = response.interactionId || `int_${taskId}_${state.totalCalls}`;
+      const interactionId = response.interactionId || `int_${taskId}_${spendState.totalCalls}`;
+      const functionCalls =
+        response.functionCalls ||
+        response.output?.functionCalls ||
+        [];
+
       const traceEntry = {
         ts: new Date().toISOString(),
         taskId,
         role,
         model,
         thinking,
+        ...(effectiveMediaResolution ? { mediaResolution: effectiveMediaResolution } : {}),
         inputTokens,
         outputTokens,
         costUsd,
@@ -224,6 +457,8 @@ export async function callModel({
 
       return {
         output: response.output,
+        functionCalls,
+        text: response.text,
         interactionId,
         inputTokens,
         outputTokens,
@@ -232,10 +467,14 @@ export async function callModel({
     } catch (err) {
       if (err.code === 'SPEND_CAP_EXCEEDED') throw err;
       const status = err.status || err.statusCode;
-      const retryable = status === 429 || (status >= 500 && status < 600);
+      const retryable =
+        status === 429 ||
+        (status >= 500 && status < 600) ||
+        err.code === 'DEADLINE_EXCEEDED' ||
+        err.retryable === true;
       if (retryable && attempt < maxRetries) {
         attempt += 1;
-        await sleep(50 * Math.pow(2, attempt));
+        await sleep(retryBackoffMs * Math.pow(2, attempt));
         continue;
       }
       appendTrace(tracePath, {
@@ -257,7 +496,56 @@ export async function callModel({
   }
 }
 
-async function defaultFakeHandler({ taskId, role, previousInteractionId }) {
+async function runWithDeadline(fn, deadlineMs, label = 'call') {
+  if (!Number.isFinite(deadlineMs) || deadlineMs <= 0) {
+    return fn();
+  }
+  let timer = null;
+  try {
+    return await Promise.race([
+      fn(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const err = new Error(`Call '${label}' exceeded deadline of ${deadlineMs}ms`);
+          err.code = 'DEADLINE_EXCEEDED';
+          err.status = 504;
+          err.retryable = true;
+          reject(err);
+        }, deadlineMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function defaultFakeHandler({ taskId, role, previousInteractionId, tools }) {
+  const hasFinishTool = Array.isArray(tools) && tools.some((t) => t.name === 'finish');
+  if (hasFinishTool) {
+    return {
+      interactionId: `fake_${taskId}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      inputTokens: 400,
+      outputTokens: 200,
+      functionCalls: [
+        {
+          id: 'call_finish_1',
+          name: 'finish',
+          arguments: {
+            report: {
+              summary: `Completed fake patcher turn for ${taskId}`,
+              addressed: [],
+              skipped: [],
+            },
+          },
+        },
+      ],
+      output: {
+        summary: `Completed fake patcher turn for ${taskId}`,
+        addressed: [],
+        skipped: [],
+      },
+    };
+  }
   return {
     interactionId: `fake_${taskId}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
     inputTokens: 400,
@@ -270,75 +558,423 @@ async function defaultFakeHandler({ taskId, role, previousInteractionId }) {
   };
 }
 
+function createRestInteractionsClient(apiKey) {
+  return {
+    async create(payload, timeoutMs = 90_000) {
+      const res = await fetch(`${INTERACTIONS_BASE_URL}?key=${encodeURIComponent(apiKey)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(Math.max(1000, timeoutMs)),
+      });
+      const text = await res.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { rawText: text };
+      }
+      if (!res.ok) {
+        const err = new Error(
+          `Interactions API create failed (${res.status}): ${data?.error?.message || text.slice(0, 300)}`
+        );
+        err.status = res.status;
+        err.retryable = res.status === 429 || res.status >= 500;
+        throw err;
+      }
+      return data;
+    },
+    async get(id, timeoutMs = 30_000) {
+      const res = await fetch(
+        `${INTERACTIONS_BASE_URL}/${encodeURIComponent(id)}?key=${encodeURIComponent(apiKey)}`,
+        {
+          method: 'GET',
+          signal: AbortSignal.timeout(Math.max(500, timeoutMs)),
+        }
+      );
+      const text = await res.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { rawText: text };
+      }
+      if (!res.ok) {
+        const err = new Error(
+          `Interactions API get(${id}) failed (${res.status}): ${data?.error?.message || text.slice(0, 300)}`
+        );
+        err.status = res.status;
+        err.retryable = res.status === 429 || res.status >= 500;
+        throw err;
+      }
+      return data;
+    },
+    async cancel(id) {
+      try {
+        const res = await fetch(
+          `${INTERACTIONS_BASE_URL}/${encodeURIComponent(id)}/cancel?key=${encodeURIComponent(apiKey)}`,
+          {
+            method: 'POST',
+            signal: AbortSignal.timeout(10_000),
+          }
+        );
+        return await res.json().catch(() => ({ id, status: 'cancelled' }));
+      } catch {
+        return { id, status: 'cancelled' };
+      }
+    },
+  };
+}
+
 async function invokeLiveInteractionsApi({
   model,
   thinking,
+  mediaResolution = 'high',
   input,
+  tools,
   background,
-  maxOutputTokens,
+  pollTimeoutMs = 90_000,
+  pollIntervalMs = 250,
   previousInteractionId,
+  schema,
+  interactionsClient,
 }) {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-  if (!apiKey) {
-    throw new Error('Missing GEMINI_API_KEY / GOOGLE_API_KEY for live model call');
+  let client = interactionsClient;
+  if (!client) {
+    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    if (!apiKey) {
+      throw new Error('Missing GEMINI_API_KEY / GOOGLE_API_KEY for live model call');
+    }
+    client = createRestInteractionsClient(apiKey);
   }
-  const { GoogleGenAI } = await import('@google/genai');
-  const ai = new GoogleGenAI({ apiKey });
 
-  // Map model alias if running against standard endpoint fallback
+  const wireInput = normalizeWireInput(input, mediaResolution);
+  const cleanSchema = sanitizeResponseSchema(schema);
+  const wireTools = Array.isArray(tools)
+    ? tools.map((t) => ({
+        type: 'function',
+        name: t.name,
+        description: t.description || '',
+        parameters: sanitizeResponseSchema(t.parameters) || { type: 'object', properties: {} },
+      }))
+    : undefined;
+
   const requestPayload = {
     model,
-    input: typeof input === 'string' ? input : JSON.stringify(input),
-    config: {
-      thinking_level: thinking,
-      maxOutputTokens,
-      ...(background ? { background: true } : {}),
-      ...(previousInteractionId ? { previous_interaction_id: previousInteractionId } : {}),
+    input: wireInput,
+    ...(background ? { background: true } : {}),
+    ...(previousInteractionId ? { previous_interaction_id: previousInteractionId } : {}),
+    ...(wireTools && wireTools.length > 0 ? { tools: wireTools } : {}),
+    ...(cleanSchema ? { response_format: cleanSchema } : {}),
+    generation_config: {
+      thinking_level: thinking || 'high',
     },
   };
 
-  if (ai.interactions && typeof ai.interactions.create === 'function') {
-    let interaction = await ai.interactions.create(requestPayload);
-    let backoff = 250;
-    while (background && interaction && (interaction.status === 'in_progress' || interaction.status === 'Running')) {
-      await sleep(backoff);
-      backoff = Math.min(backoff * 2, 4000);
-      interaction = await ai.interactions.get(interaction.id);
+  const deadlineAt = Date.now() + pollTimeoutMs;
+  let interaction = await runWithDeadline(
+    () => client.create(requestPayload, pollTimeoutMs),
+    pollTimeoutMs,
+    `interactions.create(${model})`
+  );
+
+  let backoff = pollIntervalMs;
+  while (
+    background &&
+    interaction &&
+    (interaction.status === 'in_progress' ||
+      interaction.status === 'Running' ||
+      interaction.status === 'processing')
+  ) {
+    const now = Date.now();
+    const remaining = deadlineAt - now;
+    if (remaining <= 0) {
+      if (typeof client.cancel === 'function' && interaction.id) {
+        await client.cancel(interaction.id);
+      }
+      const err = new Error(
+        `Interaction '${interaction.id}' exceeded pollTimeoutMs (${pollTimeoutMs}ms) and was cancelled`
+      );
+      err.code = 'DEADLINE_EXCEEDED';
+      err.status = 504;
+      err.retryable = true;
+      err.cancelledInteractionId = interaction.id;
+      throw err;
     }
-    const text = interaction?.output_text || interaction?.text || JSON.stringify(interaction?.output || {});
-    let parsed;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = { files: [], notes: text, board: [] };
+
+    const waitMs = Math.min(backoff, remaining);
+    await sleep(waitMs);
+    backoff = Math.min(backoff * 2, 4000);
+
+    if (Date.now() >= deadlineAt) {
+      if (typeof client.cancel === 'function' && interaction.id) {
+        await client.cancel(interaction.id);
+      }
+      const err = new Error(
+        `Interaction '${interaction.id}' exceeded pollTimeoutMs (${pollTimeoutMs}ms) and was cancelled`
+      );
+      err.code = 'DEADLINE_EXCEEDED';
+      err.status = 504;
+      err.retryable = true;
+      err.cancelledInteractionId = interaction.id;
+      throw err;
     }
-    return {
-      interactionId: interaction?.id || `live_${Date.now()}`,
-      inputTokens: interaction?.usage?.input_tokens ?? 350,
-      outputTokens: interaction?.usage?.output_tokens ?? 220,
-      output: parsed,
-    };
+
+    interaction = await runWithDeadline(
+      () => client.get(interaction.id, Math.max(500, deadlineAt - Date.now())),
+      Math.max(50, deadlineAt - Date.now()),
+      `interactions.get(${interaction.id})`
+    );
   }
 
-  // Fallback to models.generateContent if SDK version exposes generateContent
-  const fallbackModel = model.startsWith('gemini-4') || model.startsWith('gemini-3') ? 'gemini-2.5-flash' : model;
-  const res = await ai.models.generateContent({
-    model: fallbackModel,
-    contents: typeof input === 'string' ? input : JSON.stringify(input),
-  });
-  const text = res.text || '{}';
-  let parsed;
-  try {
-    const clean = text.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
-    parsed = JSON.parse(clean);
-  } catch {
-    parsed = { files: [], notes: text, board: [] };
+  if (interaction?.status === 'failed' || interaction?.status === 'cancelled') {
+    const err = new Error(
+      `Interaction '${interaction.id}' ended with status '${interaction.status}': ${JSON.stringify(interaction.error || {})}`
+    );
+    err.status = 500;
+    err.retryable = true;
+    throw err;
   }
+
+  return extractInteractionParts(interaction);
+}
+
+/**
+ * Uploads a video or media file via the Gemini Files API and polls until `state === 'ACTIVE'`.
+ * Under `ORCH_FAKE=1`, returns a deterministic fake URI without network access.
+ */
+export async function uploadMediaFile(filePath, mimeType = 'video/webm', pollTimeoutMs = 90_000) {
+  if (process.env.ORCH_FAKE === '1') {
+    return {
+      name: `files/fake_${path.basename(filePath).replace(/[^a-zA-Z0-9_-]/g, '_')}`,
+      uri: `https://generativelanguage.googleapis.com/v1beta/files/fake_${path.basename(filePath)}`,
+      mimeType,
+      state: 'ACTIVE',
+    };
+  }
+  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+  if (!apiKey) {
+    throw new Error('Missing GEMINI_API_KEY for Files API upload');
+  }
+  const { GoogleGenAI } = await import('@google/genai');
+  const ai = new GoogleGenAI({ apiKey });
+  const deadline = Date.now() + pollTimeoutMs;
+  let fileObj = await ai.files.upload({ file: filePath, mimeType });
+  let backoff = 500;
+  while (fileObj && (fileObj.state === 'PROCESSING' || fileObj.state === 'STATE_UNSPECIFIED')) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Files API upload timed out waiting for ACTIVE state on ${filePath}`);
+    }
+    await sleep(Math.min(backoff, Math.max(100, deadline - Date.now())));
+    backoff = Math.min(backoff * 1.5, 3000);
+    fileObj = await ai.files.get({ name: fileObj.name });
+  }
+  if (!fileObj || fileObj.state !== 'ACTIVE') {
+    throw new Error(`Files API upload failed for ${filePath}: state=${fileObj?.state}`);
+  }
+  return fileObj;
+}
+
+/**
+ * Multi-turn function-calling tool loop on the Interactions API (§0.3).
+ * Sends tool declarations, executes each returned function call through the caller's handler,
+ * returns the `function_result` (plus any media attachments), and repeats until the model calls
+ * `finish` or `maxToolCalls` / `deadlineMs` is reached. Every turn is traced and metered.
+ */
+export async function runToolLoop({
+  role = 'patcher',
+  model = 'gemini-4-argon',
+  thinking = 'high',
+  mediaResolution = 'high',
+  tools = [],
+  toolHandlers = {},
+  input,
+  taskId = 'tool_loop',
+  maxToolCalls = 60,
+  deadlineMs = 1_200_000,
+  pollTimeoutMs = 90_000,
+  previousInteractionId = undefined,
+  rootDir = DEFAULT_ROOT,
+  tracePath = path.join(rootDir, 'runs/orchestrator/trace.jsonl'),
+  state = undefined,
+  budgetUsd = Infinity,
+  maxCalls = Infinity,
+  fakeToolTurns = undefined,
+  fakeHandler = undefined,
+  interactionsClient = undefined,
+}) {
+  const spendState = ensurePersistentSpendState(state, tracePath);
+  const startMs = Date.now();
+  const loopDeadline = startMs + deadlineMs;
+
+  const toolMap = new Map();
+  for (const t of tools) {
+    toolMap.set(t.name, t);
+  }
+
+  const scriptedTurns =
+    fakeToolTurns ||
+    (Array.isArray(globalThis.__ORCH_FAKE_TOOL_TURNS) ? globalThis.__ORCH_FAKE_TOOL_TURNS : null);
+
+  let turnIndex = 0;
+  let toolCallsUsed = 0;
+  let prevId = previousInteractionId;
+  let currentInput = input;
+  let finished = false;
+  let finishReport = null;
+  const history = [];
+
+  while (!finished && toolCallsUsed < maxToolCalls && Date.now() < loopDeadline) {
+    const remainingMs = loopDeadline - Date.now();
+    if (remainingMs <= 0) break;
+
+    const turnTaskId = `${taskId}:turn-${turnIndex}`;
+    const turnFakeHandler =
+      scriptedTurns && !fakeHandler
+        ? async ({ previousInteractionId: pId }) => {
+            const scriptedCalls = scriptedTurns[turnIndex] || [
+              {
+                id: `call_finish_auto_${turnIndex}`,
+                name: 'finish',
+                arguments: {
+                  report: {
+                    summary: 'Finished scripted sequence',
+                    addressed: [],
+                    skipped: [],
+                  },
+                },
+              },
+            ];
+            return {
+              interactionId: `fake_tool_${taskId}_${turnIndex}_${pId ? 'cont' : 'init'}`,
+              inputTokens: 450,
+              outputTokens: 160,
+              functionCalls: scriptedCalls.map((c, idx) => ({
+                id: c.id || `call_${turnIndex}_${idx + 1}`,
+                name: c.name,
+                arguments: c.arguments || c.args || {},
+              })),
+              output: { functionCalls: scriptedCalls },
+            };
+          }
+        : fakeHandler;
+
+    const callRes = await callModel({
+      role,
+      model,
+      thinking,
+      mediaResolution,
+      media_resolution: mediaResolution,
+      input: currentInput,
+      tools,
+      taskId: turnTaskId,
+      background: true,
+      pollTimeoutMs: Math.min(pollTimeoutMs, remainingMs),
+      previousInteractionId: prevId,
+      rootDir,
+      tracePath,
+      state: spendState,
+      budgetUsd,
+      maxCalls,
+      fakeHandler: turnFakeHandler,
+      interactionsClient,
+    });
+
+    prevId = callRes.interactionId;
+    turnIndex += 1;
+
+    const functionCalls =
+      Array.isArray(callRes.functionCalls) && callRes.functionCalls.length > 0
+        ? callRes.functionCalls
+        : Array.isArray(callRes.output?.functionCalls)
+          ? callRes.output.functionCalls
+          : [];
+
+    if (functionCalls.length === 0) {
+      if (callRes.output && (callRes.output.summary || callRes.output.addressed)) {
+        finishReport = callRes.output;
+        finished = true;
+      }
+      break;
+    }
+
+    const nextTurnInputs = [];
+
+    for (const fc of functionCalls) {
+      if (toolCallsUsed >= maxToolCalls || Date.now() >= loopDeadline) {
+        break;
+      }
+      toolCallsUsed += 1;
+      const callId = fc.id || `call_${turnIndex}_${toolCallsUsed}`;
+      const args = fc.arguments || fc.args || {};
+      const toolSpec = toolMap.get(fc.name);
+      const handler = toolSpec?.handler || toolHandlers?.[fc.name];
+
+      let rawResult;
+      try {
+        if (typeof handler === 'function') {
+          rawResult = await handler(args, { id: callId, name: fc.name, turn: turnIndex, toolCallsUsed });
+        } else {
+          rawResult = { ok: false, error: `Unknown tool '${fc.name}'` };
+        }
+      } catch (toolErr) {
+        rawResult = { ok: false, error: toolErr.message || String(toolErr) };
+      }
+
+      const mediaParts =
+        rawResult && typeof rawResult === 'object'
+          ? rawResult.__mediaParts || rawResult.mediaParts || []
+          : [];
+
+      let cleanResult = rawResult;
+      if (rawResult && typeof rawResult === 'object' && ('__mediaParts' in rawResult || 'mediaParts' in rawResult)) {
+        const { __mediaParts, mediaParts: _mp, ...rest } = rawResult;
+        cleanResult = rest;
+      }
+
+      history.push({
+        id: callId,
+        name: fc.name,
+        arguments: args,
+        result: cleanResult,
+        interactionId: prevId,
+      });
+
+      nextTurnInputs.push({
+        type: 'function_result',
+        call_id: callId,
+        name: fc.name,
+        result: cleanResult ?? { ok: true },
+      });
+
+      if (Array.isArray(mediaParts) && mediaParts.length > 0) {
+        for (const mp of mediaParts) {
+          nextTurnInputs.push(mp);
+        }
+      }
+
+      if (fc.name === 'finish' && cleanResult?.ok !== false) {
+        finished = true;
+        finishReport = cleanResult?.report || args?.report || args || cleanResult;
+        break;
+      }
+    }
+
+    currentInput = nextTurnInputs;
+  }
+
   return {
-    interactionId: res.responseId || `gen_${Date.now()}`,
-    inputTokens: res.usageMetadata?.promptTokenCount ?? 300,
-    outputTokens: res.usageMetadata?.candidatesTokenCount ?? 150,
-    output: parsed,
+    finished,
+    report: finishReport || {
+      summary: finished ? 'Completed patcher turn' : 'Stopped at tool-call or deadline cap',
+      addressed: [],
+      skipped: [],
+    },
+    toolCallsUsed,
+    turns: turnIndex,
+    history,
+    lastInteractionId: prevId,
+    state: spendState,
   };
 }
 
@@ -357,7 +993,7 @@ export async function runOrchestrator(plan, options = {}) {
       execSync(cmd, { cwd, stdio: 'pipe' });
     });
 
-  const state = { totalCostUsd: 0, totalCalls: 0 };
+  const state = ensurePersistentSpendState(options.state, tracePath);
   const waves = buildWaves(plan.tasks || []);
   const completedTasks = new Map();
   const executionOrder = [];
@@ -368,7 +1004,7 @@ export async function runOrchestrator(plan, options = {}) {
   }
 
   for (const wave of waves) {
-    const waveResults = await Promise.all(
+    await Promise.all(
       wave.map(async (task) => {
         const roleSpec = roles.get(task.role);
         if (!roleSpec) throw new Error(`Unknown role '${task.role}' in task '${task.id}'`);
@@ -471,7 +1107,6 @@ export async function runOrchestrator(plan, options = {}) {
             taskOutput = escRes.output || taskOutput;
 
             for (const f of taskOutput?.files || []) {
-              // Lead architect or task owner paths allowed during escalation fix
               const leadCheck = validateOwnership(leadSpec, f.path, workDir);
               const roleCheck = validateOwnership(roleSpec, f.path, workDir);
               if (!leadCheck.ok && !roleCheck.ok) {
@@ -553,5 +1188,117 @@ function removeTaskWorktree(rootDir, wtDir, taskId) {
     execSync(`git branch -D task/${safeId}`, { cwd: rootDir, stdio: 'pipe' });
   } catch {
     // ignore if branch already removed
+  }
+}
+
+/**
+ * Worktree helpers for the Visual Feedback Loop (Prompt 2 §4.1 & §4.6).
+ */
+export function createLoopWorktree(rootDir, runId, baseBranch = 'main') {
+  const safeId = String(runId).replace(/[^a-zA-Z0-9_-]/g, '_');
+  const branchName = `loop/${safeId}`;
+  const wtDir = path.join(rootDir, 'wt', `loop-${safeId}`);
+
+  try {
+    execSync(`git show-ref --verify --quiet refs/heads/${baseBranch}`, { cwd: rootDir, stdio: 'pipe' });
+  } catch {
+    execSync(`git branch ${baseBranch} HEAD`, { cwd: rootDir, stdio: 'pipe' });
+  }
+
+  try {
+    execSync(`git worktree remove --force "${wtDir}"`, { cwd: rootDir, stdio: 'pipe' });
+  } catch {
+    fs.rmSync(wtDir, { recursive: true, force: true });
+  }
+  try {
+    execSync('git worktree prune', { cwd: rootDir, stdio: 'pipe' });
+  } catch {
+    // ignore
+  }
+
+  execSync(`git worktree add -B "${branchName}" "${wtDir}" "${baseBranch}"`, {
+    cwd: rootDir,
+    stdio: 'pipe',
+  });
+
+  const rootModules = path.join(rootDir, 'node_modules');
+  const wtModules = path.join(wtDir, 'node_modules');
+  if (fs.existsSync(rootModules) && !fs.existsSync(wtModules)) {
+    fs.symlinkSync(rootModules, wtModules, 'dir');
+  }
+
+  const startCommit = execSync('git rev-parse HEAD', { cwd: wtDir, encoding: 'utf8' }).trim();
+  return { workDir: wtDir, branchName, startCommit };
+}
+
+export function removeLoopWorktree(rootDir, wtDir, branchName, deleteBranch = false) {
+  try {
+    execSync(`git worktree remove --force "${wtDir}"`, { cwd: rootDir, stdio: 'pipe' });
+  } catch {
+    fs.rmSync(wtDir, { recursive: true, force: true });
+  }
+  try {
+    execSync('git worktree prune', { cwd: rootDir, stdio: 'pipe' });
+  } catch {
+    // ignore
+  }
+  if (deleteBranch && branchName) {
+    try {
+      execSync(`git branch -D "${branchName}"`, { cwd: rootDir, stdio: 'pipe' });
+    } catch {
+      // ignore
+    }
+  }
+}
+
+export function mergeLoopWorktree(rootDir, wtDir, runId, baseBranch = 'main') {
+  const safeId = String(runId).replace(/[^a-zA-Z0-9_-]/g, '_');
+  const branchName = `loop/${safeId}`;
+
+  // Remove the worktree checkout first so branch/worktree locks don't interfere
+  removeLoopWorktree(rootDir, wtDir, branchName, false);
+
+  try {
+    const currentBranch = execSync('git rev-parse --abbrev-ref HEAD', {
+      cwd: rootDir,
+      encoding: 'utf8',
+    }).trim();
+    if (currentBranch !== baseBranch) {
+      execSync(`git checkout "${baseBranch}"`, { cwd: rootDir, stdio: 'pipe' });
+    }
+    execSync(`git merge --no-ff "${branchName}" -m "Merge ${branchName} into ${baseBranch}"`, {
+      cwd: rootDir,
+      stdio: 'pipe',
+    });
+    return {
+      merged: true,
+      conflict: false,
+      conflictingFiles: [],
+      branch: branchName,
+    };
+  } catch {
+    let conflictingFiles = [];
+    try {
+      const out = execSync('git diff --name-only --diff-filter=U', {
+        cwd: rootDir,
+        encoding: 'utf8',
+      }).trim();
+      if (out) {
+        conflictingFiles = out.split('\n').map((s) => s.trim()).filter(Boolean);
+      }
+    } catch {
+      // ignore
+    }
+    try {
+      execSync('git merge --abort', { cwd: rootDir, stdio: 'pipe' });
+    } catch {
+      // ignore
+    }
+    return {
+      merged: false,
+      conflict: true,
+      conflictingFiles,
+      branch: branchName,
+    };
   }
 }

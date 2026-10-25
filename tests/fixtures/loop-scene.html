@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Loop Fake Scene Fixture</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 1280px;
+      height: 720px;
+      overflow: hidden;
+      background: #0f172a;
+      font-family: sans-serif;
+    }
+    #viewport {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 960px;
+      height: 720px;
+    }
+    #board-canvas {
+      display: block;
+      width: 960px;
+      height: 720px;
+    }
+    #ui-root {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 320px;
+      height: 720px;
+      background: #1e293b;
+      color: #f8fafc;
+      padding: 16px;
+      box-sizing: border-box;
+    }
+    .ui-sidebar-card {
+      background: #334155;
+      padding: 12px;
+      border-radius: 8px;
+    }
+    button {
+      display: block;
+      margin: 8px 0;
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div id="viewport">
+    <canvas id="board-canvas" width="960" height="720"></canvas>
+  </div>
+  <div id="ui-root" data-hud="true">
+    <div class="ui-sidebar-card" data-testid="tile-dock">
+      <div id="hud-text">TURN 1 | SCORE 0</div>
+      <canvas id="dock-canvas" width="96" height="96"></canvas>
+      <button data-testid="rotate-tile" id="btn-rotate">Rotate</button>
+      <button data-testid="view-toggle" id="btn-toggle">Toggle View</button>
+      <button data-testid="demo-button" id="btn-demo">Auto Demo</button>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const params = new URLSearchParams(window.location.search);
+      const mode = params.get('mode') || 'normal';
+      const canvas = document.getElementById('board-canvas');
+      const ctx = canvas.getContext('2d');
+      const hudTextEl = document.getElementById('hud-text');
+
+      let currentTime = 0;
+      let isGameplayClock = false;
+      let activeView = '2d';
+
+      const state = {
+        board: {
+          '0,0': { x: 0, z: 0, specId: 'START_CITY_ROAD', rotation: 0, level: 0, hasHouse: true },
+          '1,0': { x: 1, z: 0, specId: 'ROAD_CURVE_A', rotation: 0, level: 0, hasHouse: true }
+        },
+        currentTile: { id: 'CITY_CORNER_A', name: 'Corner Citadel' },
+        currentRotation: 0,
+        turnNumber: 1,
+        completedChains: 0,
+        legalMovesShown: false,
+        gameOver: false,
+        placedMoves: []
+      };
+
+      function drawScene(tSec, isPlayClock) {
+        currentTime = tSec;
+        isGameplayClock = Boolean(isPlayClock);
+        const w = canvas.width;
+        const h = canvas.height;
+
+        // Textured gradient background so frame is never blank unless requested
+        const grad = ctx.createLinearGradient(0, 0, w, h);
+        grad.addColorStop(0, activeView === '2d' ? '#1e3a5f' : '#2a4d69');
+        grad.addColorStop(1, activeView === '2d' ? '#0f172a' : '#1b263b');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, w, h);
+
+        // Camera pans during timeline renderAt(t); stays stationary during gameplay playAt(t)
+        const panX = isGameplayClock ? 0 : Math.round(tSec * 28);
+        const panY = isGameplayClock ? 0 : Math.round(Math.sin(tSec * 0.4) * 14);
+
+        // Draw grid lines
+        ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
+        ctx.lineWidth = 2;
+        for (let gx = -200; gx < w + 200; gx += 64) {
+          ctx.beginPath();
+          ctx.moveTo(gx + (panX % 64), 0);
+          ctx.lineTo(gx + (panX % 64), h);
+          ctx.stroke();
+        }
+        for (let gy = -200; gy < h + 200; gy += 64) {
+          ctx.beginPath();
+          ctx.moveTo(0, gy + (panY % 64));
+          ctx.lineTo(w, gy + (panY % 64));
+          ctx.stroke();
+        }
+
+        // Draw main board tiles (Tile 1 at center-left, Tile 2 at center-right)
+        const t1x = 300 + panX * 0.3;
+        const t1y = 300 + panY * 0.3;
+        ctx.fillStyle = '#6ca64c';
+        ctx.fillRect(t1x - 70, t1y - 70, 140, 140);
+        ctx.fillStyle = '#c48a5c';
+        ctx.fillRect(t1x - 45, t1y - 45, 90, 50);
+
+        const t2x = 500 + panX * 0.3;
+        const t2y = 300 + panY * 0.3;
+        ctx.fillStyle = '#6ca64c';
+        ctx.fillRect(t2x - 70, t2y - 70, 140, 140);
+
+        // Cross-view consistency test (#10): if mode === 'mismatch-3d', omit the house on tile (1,0) in 3d only
+        const showTile2House = !(mode === 'mismatch-3d' && activeView === '3d');
+        if (showTile2House) {
+          ctx.fillStyle = '#dc2626';
+          ctx.fillRect(t2x - 28, t2y - 28, 56, 56);
+        }
+
+        // Rotation indicator
+        ctx.fillStyle = '#facc15';
+        ctx.fillRect(200 + state.currentRotation * 24, 140, 22, 22);
+
+        if (state.legalMovesShown) {
+          ctx.strokeStyle = '#38bdf8';
+          ctx.lineWidth = 4;
+          ctx.strokeRect(t2x + 90, t2y - 60, 120, 120);
+        }
+
+        // Mode: 'pan-popin' (#3) -> cube pops in abruptly at t >= 1.0s while camera pans
+        if (mode === 'pan-popin' && tSec >= 1.0) {
+          ctx.fillStyle = '#ef4444';
+          ctx.fillRect(420, 220, 150, 150);
+        }
+
+        // Gameplay placed moves animation (#9):
+        // - mode === 'play-instant-popin': 100x90 block appears instantaneously in 1 frame
+        // - mode === 'play-tween-5': progressive 5-frame slide/reveal inside the same cell
+        for (const pm of state.placedMoves) {
+          const dt = Math.max(0, tSec - pm.at);
+          const framesElapsed = Math.round(dt * 12);
+          let progress = 1;
+          if (pm.tweenFrames > 1) {
+            progress = Math.min(1, (framesElapsed + 1) / pm.tweenFrames);
+          }
+          ctx.fillStyle = '#f97316';
+          const fullW = 90;
+          const fullH = pm.tweenFrames > 1 ? Math.round(75 * progress) : 90;
+          ctx.fillRect(610, 365, fullW, fullH);
+        }
+
+        // Mode: 'hud-inside-canvas' (#14) -> draws instant text box INSIDE the canvas at t >= 1.0s
+        if (mode === 'hud-inside-canvas' && tSec >= 1.0) {
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(140, 440, 220, 130);
+          ctx.fillStyle = '#000000';
+          ctx.font = 'bold 28px sans-serif';
+          ctx.fillText('SCORE 999!', 160, 515);
+        }
+
+        // Mode: 'hud-outside-canvas' (#14) -> changes DOM HUD text outside the canvas at t >= 1.0s
+        if (mode === 'hud-outside-canvas' && tSec >= 1.0) {
+          hudTextEl.textContent = 'INSTANT HUD UPDATE 999999!';
+          hudTextEl.style.background = '#ef4444';
+          hudTextEl.style.color = '#ffffff';
+        }
+      }
+
+      document.getElementById('btn-rotate').addEventListener('click', () => {
+        state.currentRotation = (state.currentRotation + 1) % 4;
+        hudTextEl.textContent = 'ROT ' + state.currentRotation;
+        drawScene(currentTime, isGameplayClock);
+      });
+
+      document.getElementById('btn-toggle').addEventListener('click', () => {
+        activeView = activeView === '2d' ? '3d' : '2d';
+        drawScene(currentTime, isGameplayClock);
+      });
+
+      document.getElementById('btn-demo').addEventListener('click', () => {
+        state.turnNumber += 3;
+        state.completedChains += 1;
+        state.gameOver = true;
+        if (mode === 'switch-view-mid-demo') {
+          activeView = activeView === '2d' ? '3d' : '2d';
+        }
+        drawScene(currentTime, isGameplayClock);
+      });
+
+      const api = {
+        ready: true,
+        getState() {
+          return JSON.parse(JSON.stringify(state));
+        },
+        loadFixture(name) {
+          if (name !== 'fixture-all-features' && name !== 'fixture-midgame' && name !== 'initial') {
+            throw new Error('Unknown fixture: ' + name);
+          }
+          state.turnNumber = name === 'fixture-midgame' ? 14 : 1;
+          state.completedChains = 1;
+          state.currentTile = { id: 'CITY_CORNER_A', name: 'Corner Citadel' };
+          drawScene(currentTime, isGameplayClock);
+          return state;
+        },
+        renderAt(t) {
+          drawScene(Number(t || 0), false);
+        },
+        playAt(t) {
+          const sec = Number(t || 0);
+          if (mode === 'switch-view-mid-script' && sec >= 0.5) {
+            activeView = activeView === '2d' ? '3d' : '2d';
+          }
+          drawScene(sec, true);
+        },
+        botMove() {
+          if (mode === 'throw-on-botmove') {
+            throw new Error('Simulated botMove crash');
+          }
+          if (mode === 'noop-botmove') {
+            return state;
+          }
+          state.turnNumber += 1;
+          state.completedChains += 1;
+          const tweenFrames = mode === 'play-instant-popin' ? 1 : 5;
+          state.placedMoves.push({ at: currentTime, tweenFrames });
+          drawScene(currentTime, true);
+          return state;
+        },
+        showLegalMoves(on) {
+          state.legalMovesShown = Boolean(on);
+          drawScene(currentTime, isGameplayClock);
+        },
+        setView(v) {
+          activeView = v;
+          drawScene(currentTime, isGameplayClock);
+        },
+        getView() {
+          return activeView;
+        },
+        listShots() {
+          return ['board-2d', 'terrace-overview'];
+        },
+        captureShot(name) {
+          activeView = name === 'board-2d' ? '2d' : '3d';
+          drawScene(0.5, false);
+          return canvas.toDataURL('image/png');
+        },
+        getTileSheet() {
+          return document.getElementById('dock-canvas');
+        },
+        audit() {
+          const mismatch = mode === 'mismatch-3d';
+          return {
+            ok: !mismatch,
+            floatingProps: 0,
+            missingPolygonOffset: 0,
+            uvStretchOutliers: 0,
+            ungroundedMeeples: 0,
+            waterSeamMismatches: 0,
+            webglWarnings: 0,
+            hudMatchesState: true,
+            viewConsistency: mismatch
+              ? {
+                  ok: false,
+                  mismatches: [
+                    {
+                      tile: '1,0',
+                      views: ['2d', '3d'],
+                      missingIn: '3d',
+                      feature: 'house',
+                      description: 'Tile 1,0 has house in 2d but missing in 3d (3d departs from tile spec)',
+                    },
+                  ],
+                }
+              : { ok: true, mismatches: [] },
+            marks: {
+              tileLabels: [
+                { shot: 'board-2d', x: 300, y: 300, label: '0,0' },
+                { shot: 'board-2d', x: 500, y: 300, label: '1,0' },
+                { shot: 'terrace-overview', x: 300, y: 300, label: '0,0' },
+                { shot: 'terrace-overview', x: 500, y: 300, label: '1,0' },
+              ],
+              floatingProps: [],
+              ungroundedMeeples: [],
+            },
+            details: mismatch ? ['Tile 1,0 missing house in 3d'] : [],
+          };
+        },
+      };
+
+      if (mode === 'missing-hook') {
+        delete api.botMove;
+      }
+      if (mode === 'missing-selector') {
+        const btn = document.getElementById('btn-rotate');
+        if (btn) btn.remove();
+      }
+
+      drawScene(0, false);
+      window.__game = api;
+    })();
+  </script>
+</body>
+</html>
