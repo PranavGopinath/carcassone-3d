@@ -1,0 +1,15 @@
+{
+  "_notes": "An item passes only if every entry in `source` passes. Hard sources (frameDiff, blankFrame, audit:*) decide; `judge` explains or covers what can't be measured. `crop: true` sends a zoomed crop; `marks` draws numbered marks from the named audit field.",
+  "items": [
+    { "id": "F1", "segment": "flat", "text": "Board reads as a flat 2D map: no perspective skew, tiles edge-to-edge with no gaps", "source": ["judge"] },
+    { "id": "R1", "segment": "rise", "text": "No frame where geometry vanishes, flickers or goes blank", "source": ["frameDiff", "blankFrame", "judge"] },
+    { "id": "R2", "segment": "rise", "text": "Props rise with the terrain; nothing pops in at once; no cracks between tiles", "source": ["frameDiff", "judge"] },
+    { "id": "O1", "shot": "underside-slab", "text": "Layered soil/stone slab edge visible under the board", "source": ["judge"] },
+    { "id": "O2", "shot": "cliff-closeup", "text": "Cliff textures are not stretched", "source": ["audit:uvStretch", "judge"], "crop": true },
+    { "id": "O3", "shot": "terrace-overview", "text": "No floating trees, rocks or props", "source": ["audit:floatingProps", "judge"], "marks": "floatingProps" },
+    { "id": "M1", "shot": "waterfall-macro", "text": "Foam at waterfall crest and base; water flows downhill", "source": ["judge"], "crop": true },
+    { "id": "M2", "shot": "bridge-hill-macro", "text": "Bridge arch spans the river with water visibly flowing under it", "source": ["judge"] },
+    { "id": "M3", "shot": "meeple-ground", "text": "Meeples sit on their features, not floating", "source": ["audit:meeplesGrounded", "judge"], "crop": true, "marks": "meeplesGrounded" },
+    { "id": "T1", "shot": "tileSheet", "text": "Every tile feature meets its edge midpoint; style matches the references", "source": ["judge"], "references": true }
+  ]
+}

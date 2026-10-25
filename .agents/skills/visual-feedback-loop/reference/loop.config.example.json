@@ -1,0 +1,44 @@
+{
+  "_fieldNotes": {
+    "hooks": "Names of functions on window[global]. null = optional. ready: resolves when textures are loaded; if null, wait for document.fonts.ready plus one renderAt(0).",
+    "timeUnit": "'s' or 'ms': the unit renderAt expects.",
+    "timeline.motionSegment": "Segment sent to judge_a as a clipped video.",
+    "frameDiff.spikeFactor": "Spike = changed-pixel fraction > spikeFactor x segment median. Raise it if camera motion causes false spikes.",
+    "patchAllowlist": "The only paths the patcher may edit."
+  },
+  "name": "tiers",
+  "devCommand": "npm run dev -- --port 5173 --strictPort",
+  "url": "http://localhost:5173/?inspect=1&seed=7&w=1280&h=720",
+  "viewport": { "width": 1280, "height": 720, "deviceScaleFactor": 1 },
+  "hooks": {
+    "global": "__game",
+    "ready": null,
+    "loadFixture": "loadFixture",
+    "renderAt": "renderAt",
+    "timeUnit": "s",
+    "listShots": "listShots",
+    "captureShot": "captureShot",
+    "audit": "audit",
+    "tileSheet": "getTileSheet"
+  },
+  "fixture": "fixture-all-features",
+  "timeline": {
+    "fps": 12,
+    "motionSegment": "rise",
+    "segments": [
+      { "id": "flat",  "start": 0, "end": 3,  "focus": "Top-down 2D map: grid alignment, UI overlap" },
+      { "id": "rise",  "start": 3, "end": 5,  "focus": "2D->3D morph: flicker, pop-in, cracks, jumps" },
+      { "id": "orbit", "start": 5, "end": 9,  "focus": "Orbit: slab strata, cliff texture stretch, floating props" },
+      { "id": "macro", "start": 9, "end": 12, "focus": "Waterfall foam, bridge over water, meeple contact" }
+    ]
+  },
+  "frameDiff": { "pixelThreshold": 24, "spikeFactor": 4 },
+  "shots": ["board-2d", "terrace-overview", "waterfall-macro", "bridge-hill-macro",
+            "cliff-closeup", "city-closeup", "meeple-ground", "underside-slab"],
+  "references": ["reference/pic162877.jpg", "reference/carcassonne-layout.jpg"],
+  "rubric": "rubric/visual.json",
+  "patchAllowlist": ["src/render/", "src/tiles/"],
+  "acceptance": ["npm run build", "npm test"],
+  "model": { "name": "gemini-4-argon", "thinking": "high", "mediaResolution": "high" },
+  "limits": { "maxIterations": 4, "budgetUsd": 5, "maxPatchesPerIteration": 3 }
+}
