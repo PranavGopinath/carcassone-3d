@@ -1,15 +1,318 @@
 {
-  "_notes": "An item passes only if every entry in `source` passes. Hard sources (frameDiff, blankFrame, audit:*) decide; `judge` explains or covers what can't be measured. `crop: true` sends a zoomed crop; `marks` draws numbered marks from the named audit field.",
+  "_notes": {
+    "kind": "'defect' = pass/fail; passes only if every entry in `source` passes. Hard sources (frameDiff, blankFrame, audit:*) decide; `judge` covers what can't be measured. 'fidelity' = the judge compares the shot with each of `references` along `aspect`, returns ranked gaps, and passes only when no high/medium gap remains.",
+    "fields": "`shot` names a canvas shot, page shot or `tileSheet`; `segment` names a timeline segment. `crop: true` sends a zoomed crop. `marks` draws numbered marks from the named audit field.",
+    "references": "References show style, materials, lighting and density, not layout. Judges ignore board shape, tile arrangement and elevation differences that come from the game rules.",
+    "views": "`views` makes an item resolve once per view and pass only if every view passes. `{view}` in a shot name expands per view (ui-{view} -> ui-2d, ui-3d). For gameplay items `segment` names a gameplay script; `at: \"after-step\"` grades the settled full-page frame after each step."
+  },
   "items": [
-    { "id": "F1", "segment": "flat", "text": "Board reads as a flat 2D map: no perspective skew, tiles edge-to-edge with no gaps", "source": ["judge"] },
-    { "id": "R1", "segment": "rise", "text": "No frame where geometry vanishes, flickers or goes blank", "source": ["frameDiff", "blankFrame", "judge"] },
-    { "id": "R2", "segment": "rise", "text": "Props rise with the terrain; nothing pops in at once; no cracks between tiles", "source": ["frameDiff", "judge"] },
-    { "id": "O1", "shot": "underside-slab", "text": "Layered soil/stone slab edge visible under the board", "source": ["judge"] },
-    { "id": "O2", "shot": "cliff-closeup", "text": "Cliff textures are not stretched", "source": ["audit:uvStretch", "judge"], "crop": true },
-    { "id": "O3", "shot": "terrace-overview", "text": "No floating trees, rocks or props", "source": ["audit:floatingProps", "judge"], "marks": "floatingProps" },
-    { "id": "M1", "shot": "waterfall-macro", "text": "Foam at waterfall crest and base; water flows downhill", "source": ["judge"], "crop": true },
-    { "id": "M2", "shot": "bridge-hill-macro", "text": "Bridge arch spans the river with water visibly flowing under it", "source": ["judge"] },
-    { "id": "M3", "shot": "meeple-ground", "text": "Meeples sit on their features, not floating", "source": ["audit:meeplesGrounded", "judge"], "crop": true, "marks": "meeplesGrounded" },
-    { "id": "T1", "shot": "tileSheet", "text": "Every tile feature meets its edge midpoint; style matches the references", "source": ["judge"], "references": true }
+    {
+      "id": "F1",
+      "kind": "defect",
+      "segment": "flat",
+      "text": "Board reads as a flat 2D map: no perspective skew, tiles edge-to-edge with no gaps",
+      "source": [
+        "judge"
+      ]
+    },
+    {
+      "id": "R1",
+      "kind": "defect",
+      "segment": "rise",
+      "text": "No frame where geometry vanishes, flickers or goes blank",
+      "source": [
+        "frameDiff",
+        "blankFrame",
+        "judge"
+      ]
+    },
+    {
+      "id": "R2",
+      "kind": "defect",
+      "segment": "rise",
+      "text": "Props, slab and water rise continuously with the terrain; nothing pops in at once; no cracks between tiles",
+      "source": [
+        "frameDiff",
+        "judge"
+      ]
+    },
+    {
+      "id": "O1",
+      "kind": "defect",
+      "shot": "underside-slab",
+      "text": "A slab edge is visible under the board along its whole perimeter",
+      "source": [
+        "judge"
+      ]
+    },
+    {
+      "id": "O2",
+      "kind": "defect",
+      "shot": "cliff-closeup",
+      "text": "Cliff textures are not stretched",
+      "source": [
+        "audit:uvStretch",
+        "judge"
+      ],
+      "crop": true
+    },
+    {
+      "id": "O3",
+      "kind": "defect",
+      "shot": "terrace-overview",
+      "text": "No floating trees, rocks or props",
+      "source": [
+        "audit:floatingProps",
+        "judge"
+      ],
+      "marks": "floatingProps"
+    },
+    {
+      "id": "M1",
+      "kind": "defect",
+      "shot": "waterfall-macro",
+      "text": "Foam at waterfall crest and base is visible; water flows downhill",
+      "source": [
+        "judge"
+      ],
+      "crop": true
+    },
+    {
+      "id": "M2",
+      "kind": "defect",
+      "shot": "bridge-hill-macro",
+      "text": "The bridge arch is unobstructed in frame and spans the river with water visibly flowing under it",
+      "source": [
+        "judge"
+      ]
+    },
+    {
+      "id": "M3",
+      "kind": "defect",
+      "shot": "meeple-ground",
+      "text": "Meeples sit on their features, not floating",
+      "source": [
+        "audit:meeplesGrounded",
+        "judge"
+      ],
+      "crop": true,
+      "marks": "meeplesGrounded"
+    },
+    {
+      "id": "T1",
+      "kind": "defect",
+      "shot": "tileSheet",
+      "text": "Every tile feature meets its edge midpoint",
+      "source": [
+        "judge"
+      ]
+    },
+    {
+      "id": "U1",
+      "kind": "defect",
+      "shot": "ui-{view}",
+      "text": "HUD never covers the board, text is legible, nothing overflows or overlaps",
+      "source": [
+        "judge"
+      ],
+      "views": [
+        "2d",
+        "3d"
+      ]
+    },
+    {
+      "id": "G1",
+      "kind": "defect",
+      "segment": "turns",
+      "views": [
+        "2d",
+        "3d"
+      ],
+      "text": "Each placed tile visibly drops or slides into the correct cell and settles flush with its neighbors; no pop-in, jump, wrong cell or seam",
+      "source": [
+        "frameDiff",
+        "blankFrame",
+        "judge"
+      ]
+    },
+    {
+      "id": "G2",
+      "kind": "defect",
+      "segment": "turns",
+      "views": [
+        "2d",
+        "3d"
+      ],
+      "at": "after-step",
+      "text": "Each placed meeple animates onto its claimed feature and ends seated on it in the player's color",
+      "source": [
+        "audit:meeplesGrounded",
+        "judge"
+      ],
+      "crop": true
+    },
+    {
+      "id": "G3",
+      "kind": "defect",
+      "segment": "turns",
+      "views": [
+        "2d",
+        "3d"
+      ],
+      "text": "Completing a feature is visibly signalled (highlight or score popup near the feature) and its meeples return to supply",
+      "source": [
+        "judge"
+      ]
+    },
+    {
+      "id": "G4",
+      "kind": "defect",
+      "segment": "turns",
+      "views": [
+        "2d",
+        "3d"
+      ],
+      "at": "after-step",
+      "text": "After every step the HUD shows the correct current player, tiles remaining, scores and meeple supply",
+      "source": [
+        "audit:hudMatchesState",
+        "judge"
+      ]
+    },
+    {
+      "id": "G5",
+      "kind": "defect",
+      "segment": "turns",
+      "views": [
+        "2d",
+        "3d"
+      ],
+      "text": "Legal placements are highlighted on the correct cells and readable in this view; the rotate button visibly rotates the tile in the dock",
+      "source": [
+        "judge"
+      ]
+    },
+    {
+      "id": "G6",
+      "kind": "defect",
+      "segment": "turns",
+      "views": [
+        "2d",
+        "3d"
+      ],
+      "text": "No console errors or exceptions during scripted play",
+      "source": [
+        "stepErrors"
+      ]
+    },
+    {
+      "id": "V1",
+      "kind": "defect",
+      "segment": "toggle",
+      "text": "Clicking the 2D/3D pill morphs smoothly both ways; the pill state matches the view; the HUD stays put and the board stays framed",
+      "source": [
+        "frameDiff",
+        "blankFrame",
+        "stepErrors",
+        "judge"
+      ]
+    },
+    {
+      "id": "S1",
+      "kind": "fidelity",
+      "shot": "terrace-overview",
+      "references": [
+        "public/reference/diorama-style-ref.png"
+      ],
+      "aspect": "Environment: the board floats in an open, bright sky with soft volumetric clouds around and below it; no flat void, dark background or ground plane under it",
+      "text": "Board floats in a cloudy sky like the reference",
+      "source": [
+        "judge"
+      ]
+    },
+    {
+      "id": "S2",
+      "kind": "fidelity",
+      "shot": "underside-slab",
+      "references": [
+        "public/reference/diorama-style-ref.png"
+      ],
+      "aspect": "Cross-section slab: grass lip overhanging the edge, a thick brown soil band, blue-slate rock strata below, irregular eroded edges and texture, tapering underside",
+      "text": "Slab cross-section matches the reference's layered earth and rock",
+      "source": [
+        "judge"
+      ]
+    },
+    {
+      "id": "S3",
+      "kind": "fidelity",
+      "shot": "city-closeup",
+      "references": [
+        "public/reference/diorama-style-ref.png"
+      ],
+      "aspect": "City: cream limestone curtain walls with crenellations, round towers with conical blue-slate roofs, dense mix of terracotta and slate pitched roofs inside the walls, buildings with visible detail",
+      "text": "Walled city matches the reference's architecture and density",
+      "source": [
+        "judge"
+      ],
+      "crop": true
+    },
+    {
+      "id": "S4",
+      "kind": "fidelity",
+      "shot": "terrace-overview",
+      "references": [
+        "public/reference/diorama-style-ref.png"
+      ],
+      "aspect": "Ground cover and vegetation: tufted, textured meadow grass with color variation; clustered mixed conifer and broadleaf trees and shrubs at similar density and scale; cobblestone roads with edging; cottages with terracotta roofs",
+      "text": "Meadow, trees, roads and cottages match the reference's detail and density",
+      "source": [
+        "judge"
+      ]
+    },
+    {
+      "id": "S5",
+      "kind": "fidelity",
+      "shot": "terrace-overview",
+      "references": [
+        "public/reference/diorama-style-ref.png"
+      ],
+      "aspect": "Lighting and color: warm low-angle sunlight, soft cast shadows from walls, trees and buildings, ambient occlusion in crevices, gentle atmospheric depth, saturated but natural palette",
+      "text": "Lighting and palette match the reference",
+      "source": [
+        "judge"
+      ]
+    },
+    {
+      "id": "S6",
+      "kind": "fidelity",
+      "shot": "tileSheet",
+      "references": [
+        "public/reference/carcassonne-layout.jpg",
+        "public/reference/diorama-style-ref.png"
+      ],
+      "aspect": "2D tiles: features read like Carcassonne tiles (city segments, roads, fields, monasteries), painted with the reference diorama's palette and materials",
+      "text": "Tile art matches both references",
+      "source": [
+        "judge"
+      ]
+    },
+    {
+      "id": "S7",
+      "kind": "fidelity",
+      "shot": "ui-{view}",
+      "references": [
+        "public/reference/ui-layout-ref.jpg"
+      ],
+      "aspect": "HUD layout and style: turn indicator top-left, 2D/3D pill toggle top-center, a tall frosted-glass panel on the right holding current tile with count, meeple supply, a rotate button and score; clean sans-serif type; the board stays the visual focus. Extra controls are fine if they follow this style",
+      "text": "HUD matches the reference layout and style",
+      "source": [
+        "judge"
+      ],
+      "views": [
+        "2d",
+        "3d"
+      ]
+    }
   ]
 }
