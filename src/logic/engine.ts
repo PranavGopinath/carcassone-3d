@@ -321,7 +321,8 @@ export function getLegalMovesForTile(
       const candEdges = getRotatedEdges(spec, rot);
       const candLevels = getRotatedEdgeLevels(spec, rot);
 
-      let impliedLevel: number | null = null;
+      let featureImpliedLevel: number | null = null;
+      let grassImpliedLevel: number | null = null;
       let valid = true;
       let neighborCount = 0;
 
@@ -344,14 +345,24 @@ export function getLegalMovesForTile(
 
         const expectedLevel =
           neighbor.level + neighborLevels[offset.opposite] - candLevels[offset.dir];
-        if (impliedLevel === null) {
-          impliedLevel = expectedLevel;
-        } else if (impliedLevel !== expectedLevel) {
-          valid = false;
-          break;
+        if (candEdges[offset.dir] !== 'GRASS') {
+          if (featureImpliedLevel === null) {
+            featureImpliedLevel = expectedLevel;
+          } else if (featureImpliedLevel !== expectedLevel) {
+            valid = false;
+            break;
+          }
+        } else {
+          if (grassImpliedLevel === null) {
+            grassImpliedLevel = expectedLevel;
+          } else if (grassImpliedLevel !== expectedLevel) {
+            valid = false;
+            break;
+          }
         }
       }
 
+      const impliedLevel = featureImpliedLevel ?? grassImpliedLevel;
       if (!valid || neighborCount === 0 || impliedLevel === null) {
         continue;
       }

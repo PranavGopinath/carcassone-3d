@@ -474,24 +474,65 @@ function drawRivers(
     ctx.fill();
   }
 
-  // 3. Deep channel & shimmering water flow highlights (strictly clipped to interior >= 11px)
-  const rippleMargin = Math.max(11, Math.round(0.045 * size));
+  // 3. Deep channel, whitewater rapids & riverbank boulders/reeds (strictly clipped to interior >= 14px)
+  const rippleMargin = Math.max(14, Math.round(0.055 * size));
   ctx.save();
   ctx.beginPath();
   ctx.rect(rippleMargin, rippleMargin, size - rippleMargin * 2, size - rippleMargin * 2);
   ctx.clip();
 
   traceRiverPath();
-  ctx.strokeStyle = 'rgba(28, 92, 152, 0.42)';
-  ctx.lineWidth = wWater * 0.55;
+  ctx.strokeStyle = 'rgba(28, 92, 152, 0.45)';
+  ctx.lineWidth = wWater * 0.56;
   ctx.lineCap = 'round';
   ctx.stroke();
 
   traceRiverPath();
-  ctx.strokeStyle = 'rgba(165, 224, 255, 0.42)';
-  ctx.lineWidth = wWater * 0.2;
+  ctx.strokeStyle = 'rgba(186, 230, 253, 0.58)';
+  ctx.lineWidth = wWater * 0.22;
+  ctx.setLineDash([Math.max(3, size * 0.028), Math.max(3, size * 0.022)]);
   ctx.lineCap = 'round';
   ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Riverbank boulders, stepping stones & lush reed clusters along each water segment
+  for (const s of waterSides) {
+    for (const [bIdx, distFrac] of [0.16, 0.27, 0.38].entries()) {
+      const bankSign = bIdx % 2 === 0 ? 1 : -1;
+      const bankOffset = bankSign * 0.118;
+      const bPt = edgePointCW(s, 0.5 + bankOffset, distFrac * size, size);
+      const bRad = size * (bIdx === 1 ? 0.018 : 0.015);
+
+      // Boulder shadow
+      ctx.fillStyle = 'rgba(20, 32, 24, 0.38)';
+      ctx.beginPath();
+      ctx.arc(bPt.x + size * 0.004, bPt.y + size * 0.004, bRad * 1.1, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Grey-slate river boulder
+      ctx.fillStyle = bIdx % 2 === 0 ? '#78828c' : '#64748b';
+      ctx.beginPath();
+      ctx.arc(bPt.x, bPt.y, bRad, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Sunlit rock highlight
+      ctx.fillStyle = '#cbd5e1';
+      ctx.beginPath();
+      ctx.arc(bPt.x - bRad * 0.25, bPt.y - bRad * 0.25, bRad * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Opposite bank green reed cluster
+      const rPt = edgePointCW(s, 0.5 - bankOffset * 0.95, (distFrac + 0.03) * size, size);
+      ctx.fillStyle = '#2d5a27';
+      ctx.beginPath();
+      ctx.arc(rPt.x, rPt.y, size * 0.013, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#65a30d';
+      ctx.beginPath();
+      ctx.arc(rPt.x - size * 0.003, rPt.y - size * 0.003, size * 0.008, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
   ctx.restore();
 }
 
@@ -679,30 +720,47 @@ function drawSpecials(
         lowSide = s;
       }
     }
-    const poolPt = edgePointCW(lowSide, 0.5, size * 0.27, size);
+    const crestPt = edgePointCW(lowSide, 0.5, size * 0.34, size);
+    const poolPt = edgePointCW(lowSide, 0.5, size * 0.14, size);
 
-    // Rocky cliff ledge across river
-    ctx.fillStyle = '#57534e';
+    // Cascading whitewater streaks from crest down to lower-level plunge pool
+    ctx.strokeStyle = 'rgba(224, 242, 254, 0.88)';
+    ctx.lineWidth = size * 0.11;
+    ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.arc(poolPt.x, poolPt.y, size * 0.13, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.moveTo(crestPt.x, crestPt.y);
+    ctx.lineTo(poolPt.x, poolPt.y);
+    ctx.stroke();
 
-    // Plunge pool and white/cyan waterfall foam spray
+    // Lower-level plunge pool and white/cyan waterfall foam spray at canyon floor
     ctx.fillStyle = '#38bdf8';
     ctx.beginPath();
-    ctx.arc(poolPt.x, poolPt.y, size * 0.1, 0, Math.PI * 2);
+    ctx.arc(poolPt.x, poolPt.y, size * 0.095, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = '#e0f2fe';
+    ctx.fillStyle = '#f0f9ff';
     for (let i = -2; i <= 2; i++) {
       ctx.beginPath();
       ctx.arc(
-        poolPt.x + (lowSide % 2 === 0 ? i * size * 0.025 : 0),
-        poolPt.y + (lowSide % 2 === 1 ? i * size * 0.025 : 0),
-        size * 0.028,
+        poolPt.x + (lowSide % 2 === 0 ? i * size * 0.022 : 0),
+        poolPt.y + (lowSide % 2 === 1 ? i * size * 0.022 : 0),
+        size * 0.026,
         0,
         Math.PI * 2
       );
+      ctx.fill();
+    }
+
+    // Flanking canyon boulders on both banks of the lower plunge pool
+    for (const sideU of [0.36, 0.64]) {
+      const rockPt = edgePointCW(lowSide, sideU, size * 0.16, size);
+      ctx.fillStyle = '#57534e';
+      ctx.beginPath();
+      ctx.arc(rockPt.x, rockPt.y, size * 0.028, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#a8a29e';
+      ctx.beginPath();
+      ctx.arc(rockPt.x - size * 0.006, rockPt.y - size * 0.006, size * 0.012, 0, Math.PI * 2);
       ctx.fill();
     }
 
@@ -715,25 +773,36 @@ function drawSpecials(
         lowSide = s;
       }
     }
-    const dropPt = edgePointCW(lowSide, 0.5, size * 0.28, size);
+    const crestPt = edgePointCW(lowSide, 0.5, size * 0.36, size);
+    const dropPt = edgePointCW(lowSide, 0.5, size * 0.14, size);
 
-    // Cliff rim
-    ctx.strokeStyle = '#57534e';
-    ctx.lineWidth = Math.max(4, size * 0.03);
+    // Cascading whitewater streaks from crest down to lower canyon floor
+    ctx.strokeStyle = 'rgba(224, 242, 254, 0.88)';
+    ctx.lineWidth = size * 0.11;
+    ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.arc(dropPt.x, dropPt.y, size * 0.12, 0, Math.PI * 2);
+    ctx.moveTo(crestPt.x, crestPt.y);
+    ctx.lineTo(dropPt.x, dropPt.y);
     ctx.stroke();
 
-    // Plunge pool + foam band
+    // Lower-level plunge pool + foam band
     ctx.fillStyle = '#7dd3fc';
     ctx.beginPath();
-    ctx.arc(dropPt.x, dropPt.y, size * 0.095, 0, Math.PI * 2);
+    ctx.arc(dropPt.x, dropPt.y, size * 0.09, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.fillStyle = '#f0f9ff';
     ctx.beginPath();
-    ctx.arc(dropPt.x, dropPt.y, size * 0.055, 0, Math.PI * 2);
+    ctx.arc(dropPt.x, dropPt.y, size * 0.052, 0, Math.PI * 2);
     ctx.fill();
+
+    for (const sideU of [0.36, 0.64]) {
+      const rockPt = edgePointCW(lowSide, sideU, size * 0.16, size);
+      ctx.fillStyle = '#57534e';
+      ctx.beginPath();
+      ctx.arc(rockPt.x, rockPt.y, size * 0.028, 0, Math.PI * 2);
+      ctx.fill();
+    }
   } else if (spec.special === 'BRIDGE_FLAT') {
     drawBridgeDeck(false);
   } else if (spec.special === 'BRIDGE_HILL') {
@@ -742,21 +811,47 @@ function drawSpecials(
     // Shoreline rim
     ctx.fillStyle = '#84a98c';
     ctx.beginPath();
-    ctx.ellipse(half, half, size * 0.24, size * 0.2, 0, 0, Math.PI * 2);
+    ctx.ellipse(half, half, size * 0.25, size * 0.21, 0, 0, Math.PI * 2);
     ctx.fill();
 
     // Lake basin
     ctx.fillStyle = rgbStr(PALETTE.WATER);
     ctx.beginPath();
-    ctx.ellipse(half, half, size * 0.22, size * 0.18, 0, 0, Math.PI * 2);
+    ctx.ellipse(half, half, size * 0.23, size * 0.19, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Deep center basin
+    ctx.fillStyle = 'rgba(28, 92, 152, 0.48)';
+    ctx.beginPath();
+    ctx.ellipse(half, half, size * 0.14, size * 0.11, 0, 0, Math.PI * 2);
     ctx.fill();
 
     // Shoreline ripples
     ctx.strokeStyle = '#bae6fd';
     ctx.lineWidth = Math.max(1.5, size * 0.008);
     ctx.beginPath();
-    ctx.ellipse(half, half, size * 0.14, size * 0.11, 0, 0, Math.PI * 2);
+    ctx.ellipse(half, half, size * 0.16, size * 0.125, 0, 0, Math.PI * 2);
     ctx.stroke();
+
+    // Central rocky islet & shoreline boulders/reeds
+    ctx.fillStyle = '#64748b';
+    ctx.beginPath();
+    ctx.arc(half - size * 0.04, half + size * 0.02, size * 0.026, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#cbd5e1';
+    ctx.beginPath();
+    ctx.arc(half - size * 0.046, half + size * 0.014, size * 0.011, 0, Math.PI * 2);
+    ctx.fill();
+
+    for (let a = 0; a < 5; a++) {
+      const ang = a * 1.25 + 0.4;
+      const bx = half + Math.cos(ang) * size * 0.22;
+      const by = half + Math.sin(ang) * size * 0.18;
+      ctx.fillStyle = a % 2 === 0 ? '#57534e' : '#3f6212';
+      ctx.beginPath();
+      ctx.arc(bx, by, size * 0.018, 0, Math.PI * 2);
+      ctx.fill();
+    }
   } else if (spec.special === 'SPRING') {
     // Rocky spring boulders
     ctx.fillStyle = '#6b7280';
@@ -1136,6 +1231,9 @@ export function get2DTileFeatureSummary(spec: TileSpec, rotation: Rotation): str
 
   for (let s = 0 as DirIndex; s < 4; s = (s + 1) as DirIndex) {
     if (edges[s] === 'CITY') features.push(`city-sector-${s}`);
+  }
+  if (edges.some((e) => e === 'WATER')) {
+    features.push(`river-channel-${spec.id}`);
   }
   if (
     spec.special === 'WATERFALL_BRIDGE' ||
