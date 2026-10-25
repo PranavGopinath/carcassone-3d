@@ -49,6 +49,10 @@ export interface DioramaRenderer {
   listShots(): ShotName[];
   captureShot(name: ShotName): string;
   audit(): AuditReport;
+  pickGhostEdgeAtClientPoint?(
+    clientX: number,
+    clientY: number
+  ): { move: LegalMove; edgeIndex: DirIndex; featureType: Exclude<EdgeType, 'GRASS'> } | null;
   dispose(): void;
 }
 
@@ -499,6 +503,25 @@ export function createDioramaRenderer(
   let orbitAngleOffset = 0;
   let waterfallAnimatedMeshes: THREE.Object3D[] = [];
 
+  // Tile placement ("world building") animation & delayed camera zoom-out state
+  let knownTileKeys = new Set<string>();
+  let placingTileKey: string | null = null;
+  let placeAnimStartMs = 0;
+  const PLACE_DROP_MS = 580;
+  const PLACE_HOLD_MS = 470;
+  const PLACE_ZOOM_MS = 650;
+  const placeCameraHoldPos = new THREE.Vector3();
+  const placeCameraHoldTarget = new THREE.Vector3();
+  let placeCameraHoldFov = FOV_2D;
+  const placeCameraNextPos = new THREE.Vector3();
+  const placeCameraNextTarget = new THREE.Vector3();
+  let placeCameraNextFov = FOV_2D;
+
+  function easeOutCubic(t: number): number {
+    const x = Math.max(0, Math.min(1, t));
+    return 1 - Math.pow(1 - x, 3);
+  }
+
   function applyHeightScale(scale: number) {
     currentHeightScale = Math.max(0, Math.min(1, scale));
     // Never let scale.y reach 0.0 to avoid singular normal matrices in WebGL
@@ -564,31 +587,9 @@ export function createDioramaRenderer(
     const spanX = Math.max(5.0, maxX - minX + 2.2);
     const spanZ = Math.max(5.0, maxZ - minZ + 2.2);
 
-    // Top-Point Crown Framing:
-    // Find centroid of highest crownLevel tile(s) and lowest canyon tile(s)
+    // Keep a consistent isometric orientation angle during play so placing a tile never spins/glitches the board orientation
     const crownTiles = placedList.filter((t) => t.crownLevel === maxCrown);
-    const lowTiles = placedList.filter(
-      (t) => t.level + Math.min(...t.spec.edgeLevels) === minElevation
-    );
-
-    const crownX = crownTiles.reduce((acc, t) => acc + t.x, 0) / crownTiles.length;
-    const crownZ = crownTiles.reduce((acc, t) => acc + t.z, 0) / crownTiles.length;
-    const lowX = lowTiles.reduce((acc, t) => acc + t.x, 0) / lowTiles.length;
-    const lowZ = lowTiles.reduce((acc, t) => acc + t.z, 0) / lowTiles.length;
-
-    const vx = (crownX - cx) + 0.6 * (cx - lowX);
-    const vz = (crownZ - cz) + 0.6 * (cz - lowZ);
-
-    let crownYaw = Math.PI * 0.22; // Default oblique isometric angle
-    if (Math.hypot(vx, vz) > 0.05) {
-      // Position camera on opposite side (-vx, -vz) so the high crown sits toward the top/back of the composition
-      crownYaw = Math.atan2(-vx, -vz);
-      // Add slight isometric obliqueness if nearly aligned with a cardinal axis
-      const modQuarter = Math.abs(crownYaw % (Math.PI / 2));
-      if (modQuarter < 0.18 || modQuarter > Math.PI / 2 - 0.18) {
-        crownYaw += 0.32;
-      }
-    }
+    const crownYaw = Math.PI * 0.22;
 
     return {
       cx,
@@ -1285,17 +1286,72 @@ export function createDioramaRenderer(
 
     const placedList = Object.values(currentState.board);
     for (const tile of placedList) {
-      tilesGroup.add(buildTileMesh(tile));
-      skirtsGroup.add(buildCliffSkirtsAndUnderside(tile));
-      propsGroup.add(buildTileProps(tile));
+      const tKey = `${tile.x},${tile.z}`;
+      const tMesh = buildTileMesh(tile);
+      tMesh.userData.tileKey = tKey;
+      tilesGroup.add(tMesh);
+
+      const sGroup = buildCliffSkirtsAndUnderside(tile);
+      sGroup.userData.tileKey = tKey;
+      skirtsGroup.add(sGroup);
+
+      const pGroup = buildTileProps(tile);
+      pGroup.userData.tileKey = tKey;
+      propsGroup.add(pGroup);
+
       const meeple = buildMeeplePawn(tile);
       if (meeple) {
+        meeple.userData.tileKey = tKey;
         meeplesGroup.add(meeple);
       }
     }
 
     buildGhostSpots(currentLegalMoves);
     worldGroup.updateMatrixWorld(true);
+  }
+
+  function applyTilePlacementProgress(tileKey: string | null, progress: number) {
+    if (!tileKey) return;
+    const clamped = Math.max(0, Math.min(1, progress));
+    const easedDrop = easeOutCubic(clamped);
+    const yOffset = (1 - easedDrop) * 1.45;
+    const xzScale = 0.35 + 0.65 * easedDrop;
+    const propScale = Math.max(0.01, easeOutCubic(Math.max(0, (clamped - 0.18) / 0.82)));
+
+    for (const child of tilesGroup.children) {
+      if (child.userData?.tileKey === tileKey) {
+        child.position.y = yOffset;
+        child.scale.set(xzScale, 1, xzScale);
+      }
+    }
+    for (const child of skirtsGroup.children) {
+      if (child.userData?.tileKey === tileKey) {
+        child.position.y = yOffset;
+        child.scale.set(xzScale, 1, xzScale);
+      }
+    }
+    for (const child of propsGroup.children) {
+      if (child.userData?.tileKey === tileKey) {
+        child.position.y = yOffset;
+        child.scale.set(xzScale, propScale, xzScale);
+      }
+    }
+    for (const child of meeplesGroup.children) {
+      if (child.userData?.tileKey === tileKey) {
+        const baseExpectedY = child.userData.expectedY ?? 0;
+        child.position.y = baseExpectedY + yOffset * 1.15;
+        child.scale.set(propScale, propScale, propScale);
+      }
+    }
+    worldGroup.updateMatrixWorld(true);
+  }
+
+  function finishActiveTilePlacement() {
+    if (placingTileKey) {
+      applyTilePlacementProgress(placingTileKey, 1);
+      placingTileKey = null;
+    }
+    ghostsGroup.visible = true;
   }
 
   /**
@@ -1379,6 +1435,42 @@ export function createDioramaRenderer(
       } else if (orbitActive) {
         const pose = computeCameraPoseForMode('3d', orbitAngleOffset);
         applyCameraPose(pose.pos, pose.target, pose.fov, pose.heightScale);
+      } else if (placingTileKey) {
+        const elapsed = nowMs - placeAnimStartMs;
+        const totalMs = PLACE_DROP_MS + PLACE_HOLD_MS + PLACE_ZOOM_MS;
+        const hScale = viewMode === '3d' ? 1 : 0;
+
+        if (elapsed < PLACE_DROP_MS) {
+          // Phase 1: Block drops into place and builds the scene while camera stays locked at same angle & zoom
+          const dropT = elapsed / PLACE_DROP_MS;
+          applyTilePlacementProgress(placingTileKey, dropT);
+          ghostsGroup.visible = false;
+          applyCameraPose(placeCameraHoldPos, placeCameraHoldTarget, placeCameraHoldFov, hScale);
+        } else if (elapsed < PLACE_DROP_MS + PLACE_HOLD_MS) {
+          // Phase 2: Hold camera steady at the same angle after the block lands so player sees the world build
+          applyTilePlacementProgress(placingTileKey, 1);
+          ghostsGroup.visible = false;
+          applyCameraPose(placeCameraHoldPos, placeCameraHoldTarget, placeCameraHoldFov, hScale);
+        } else if (elapsed < totalMs) {
+          // Phase 3: Smoothly zoom camera out (keeping the exact same angle) for the next player's turn
+          applyTilePlacementProgress(placingTileKey, 1);
+          ghostsGroup.visible = true;
+          const zoomT = (elapsed - PLACE_DROP_MS - PLACE_HOLD_MS) / PLACE_ZOOM_MS;
+          const easedZoom = easeInOutCubic(zoomT);
+          const pos = new THREE.Vector3().lerpVectors(placeCameraHoldPos, placeCameraNextPos, easedZoom);
+          const target = new THREE.Vector3().lerpVectors(
+            placeCameraHoldTarget,
+            placeCameraNextTarget,
+            easedZoom
+          );
+          const fov = placeCameraHoldFov + (placeCameraNextFov - placeCameraHoldFov) * easedZoom;
+          applyCameraPose(pos, target, fov, hScale);
+        } else {
+          applyTilePlacementProgress(placingTileKey, 1);
+          ghostsGroup.visible = true;
+          placingTileKey = null;
+          applyCameraPose(placeCameraNextPos, placeCameraNextTarget, placeCameraNextFov, hScale);
+        }
       }
 
       // Subtle waterfall foam pulse
@@ -1411,9 +1503,42 @@ export function createDioramaRenderer(
 
   return {
     syncState(state: GameState, legalMoves: LegalMove[] = []) {
+      const incomingKeys = Object.keys(state.board);
+      let newlyAddedKey: string | null = null;
+      if (!inspectMode && knownTileKeys.size >= 1 && incomingKeys.length === knownTileKeys.size + 1) {
+        for (const k of incomingKeys) {
+          if (!knownTileKeys.has(k)) {
+            newlyAddedKey = k;
+            break;
+          }
+        }
+      }
+      knownTileKeys = new Set(incomingKeys);
+
       currentState = state;
       currentLegalMoves = legalMoves;
       rebuildScene();
+
+      if (newlyAddedKey && !morphActive && !orbitActive) {
+        // Lock current camera pose first, animate the new block building the scene, wait, then zoom out
+        placingTileKey = newlyAddedKey;
+        placeAnimStartMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        placeCameraHoldPos.copy(camera.position);
+        placeCameraHoldTarget.copy(currentLookAt);
+        placeCameraHoldFov = camera.fov;
+
+        const nextPose = computeCameraPoseForMode(viewMode);
+        placeCameraNextPos.copy(nextPose.pos);
+        placeCameraNextTarget.copy(nextPose.target);
+        placeCameraNextFov = nextPose.fov;
+
+        applyTilePlacementProgress(placingTileKey, 0);
+        ghostsGroup.visible = false;
+        renderNow();
+        return;
+      }
+
+      finishActiveTilePlacement();
       if (!morphActive && !orbitActive) {
         const pose = computeCameraPoseForMode(viewMode);
         applyCameraPose(pose.pos, pose.target, pose.fov, pose.heightScale);
@@ -1518,6 +1643,7 @@ export function createDioramaRenderer(
      * - 9 - 12s: Macro zoom onto the waterfall (`9 - 10.5s`) then the hill bridge (`10.5 - 12s`)
      */
     renderAt(tSeconds: number) {
+      finishActiveTilePlacement();
       morphActive = false;
       orbitActive = false;
 
@@ -1580,6 +1706,7 @@ export function createDioramaRenderer(
     },
 
     captureShot(name: ShotName): string {
+      finishActiveTilePlacement();
       morphActive = false;
       orbitActive = false;
       const { cx, cz } = computeBoardFraming();
@@ -1700,6 +1827,7 @@ export function createDioramaRenderer(
      * Inspects placed tile meshes, props, overlays, cliff skirts, meeples, and water seams.
      */
     audit(): AuditReport {
+      finishActiveTilePlacement();
       const details: string[] = [];
       let floatingProps = 0;
       let missingPolygonOffset = 0;
@@ -1838,6 +1966,50 @@ export function createDioramaRenderer(
         webglWarnings,
         details,
       };
+    },
+
+    pickGhostEdgeAtClientPoint(
+      clientX: number,
+      clientY: number
+    ): { move: LegalMove; edgeIndex: DirIndex; featureType: Exclude<EdgeType, 'GRASS'> } | null {
+      if (currentLegalMoves.length === 0) return null;
+      const rect = domElement.getBoundingClientRect();
+      const w = rect.width || initWidth;
+      const h = rect.height || initHeight;
+      pointerNDC.x = ((clientX - rect.left) / w) * 2 - 1;
+      pointerNDC.y = -((clientY - rect.top) / h) * 2 + 1;
+
+      raycaster.setFromCamera(pointerNDC, camera);
+      const hits = raycaster.intersectObjects(ghostsGroup.children, true);
+      for (const hit of hits) {
+        const lm = hit.object.userData?.legalMove as LegalMove | undefined;
+        if (lm && lm.legalMeepleEdges.length > 0) {
+          const localX = hit.point.x - lm.x;
+          const localZ = hit.point.z - lm.z;
+          const socketOffsets: Record<DirIndex, [number, number]> = {
+            0: [0, -0.35],
+            1: [0.35, 0],
+            2: [0, 0.35],
+            3: [-0.35, 0],
+          };
+          let best = lm.legalMeepleEdges[0];
+          let bestDist = Infinity;
+          for (const cand of lm.legalMeepleEdges) {
+            const [ox, oz] = socketOffsets[cand.edgeIndex];
+            const d = Math.hypot(localX - ox, localZ - oz);
+            if (d < bestDist) {
+              bestDist = d;
+              best = cand;
+            }
+          }
+          return {
+            move: lm,
+            edgeIndex: best.edgeIndex,
+            featureType: best.featureType,
+          };
+        }
+      }
+      return null;
     },
 
     dispose() {

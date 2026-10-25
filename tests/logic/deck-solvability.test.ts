@@ -45,20 +45,21 @@ describe('20-Tile Deck Solvability Gate', () => {
     expect(finalState.board['0,-3']?.crownLevel).toBe(1);
   });
 
-  it('awards +2 immediate elevation bonuses, completed chain points, and end-game incomplete chain half-points', () => {
+  it('only scores points when a feature chain is completed during play and awards half-points at the end of the game', () => {
+    // Check mid-game before any chain completes (first 7 moves): scores remain 0
+    let midState = createInitialState();
+    for (let i = 0; i < 7; i++) {
+      midState = applyMove(midState, CANONICAL_MOVES[i]);
+    }
+    expect(midState.players[1].score).toBe(0);
+    expect(midState.players[2].score).toBe(0);
+
     const finalState = runReplay(CANONICAL_MOVES);
 
     const elevationEvents = finalState.events.filter((e) => e.featureType === 'ELEVATION');
-    // 5 elevation changer tiles in DECK: GRASS_HILL_A, WATERFALL_BRIDGE, BRIDGE_HILL_A, WATERFALL_BEND, GRASS_PLATEAU
-    expect(elevationEvents).toHaveLength(5);
-    for (const ev of elevationEvents) {
-      expect(ev.points).toBe(2);
-      expect(ev.completed).toBe(true);
-    }
+    expect(elevationEvents).toHaveLength(0);
 
-    const completedFeatureEvents = finalState.events.filter(
-      (e) => e.completed && e.featureType !== 'ELEVATION',
-    );
+    const completedFeatureEvents = finalState.events.filter((e) => e.completed);
     expect(completedFeatureEvents.length).toBeGreaterThanOrEqual(2);
 
     const incompleteEvents = finalState.events.filter((e) => !e.completed);

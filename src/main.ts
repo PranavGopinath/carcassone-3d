@@ -194,6 +194,17 @@ function bootstrap() {
       selectedMeeple = choice;
       syncAll();
     },
+    onDropMeepleOnBoard: (clientX, clientY) => {
+      if (demoRunning || state.gameOver || !state.currentTile) return false;
+      const picked = renderer.pickGhostEdgeAtClientPoint?.(clientX, clientY);
+      if (!picked) return false;
+      selectedMeeple = {
+        edgeIndex: picked.edgeIndex,
+        featureType: picked.featureType,
+      };
+      handlePlaceMove(picked.move);
+      return true;
+    },
   });
 
   window.addEventListener('keydown', (e) => {

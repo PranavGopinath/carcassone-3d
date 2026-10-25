@@ -483,20 +483,8 @@ export function applyMove(state: GameState, move: Move): GameState {
 
   board[coordKey(move.x, move.z)] = newTile;
 
-  // 1. Immediate Elevation Bonus (+2 pts)
-  if (isElevationChanger(spec)) {
-    players[activePlayer].score += 2;
-    events.push({
-      turn: state.turnNumber,
-      playerId: activePlayer,
-      points: 2,
-      reason: `Elevation bonus (+2) for placing ${spec.name}`,
-      featureType: 'ELEVATION',
-      completed: true,
-    });
-  }
-
-  // 2. Evaluate all unique feature chains touched by the newly placed tile
+  // Evaluate all unique feature chains touched by the newly placed tile
+  // (Points are ONLY scored when a feature chain is completed, and half-points at the end of the game)
   const visitedSocketKeys = new Set<string>();
   const rotatedEdges = getRotatedEdges(spec, move.rotation);
 
