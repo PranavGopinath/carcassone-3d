@@ -1,123 +1,205 @@
 ---
 name: subagent-orchestrator
 description: >-
-  Use this skill to build, configure, test, and run the multi-agent orchestration layer (Prompt 0)
-  for project waves, role-based subagent execution, worktree isolation, deterministic ownership checks,
-  and offline fake-model testing.
+  Build, test, and run the multi-agent orchestration layer (Prompt 0) for Carcassonne-3D/Tiers,
+  including topological wave execution, Git worktree isolation, deterministic ownership checks,
+  Interactions API adapter with offline fake-model testing, and spend metering.
 ---
 
 # Subagent Orchestration Skill (Prompt 0)
 
-This skill guides the design, implementation, and execution of the **Subagent Orchestration Layer** (`Prompt 0`). It provides the runtime environment on which subsequent build waves (`PROMPT_1`) and autonomous feedback loops (`PROMPT_2`) operate.
+Build this FIRST. It is the machinery that PROMPT_1 (build) and PROMPT_2 (feedback loop) run on. It also is the "multi-agent orchestration" the judges can see live.
+
+**Timebox: 60-90 minutes, under about 600 lines total.** It must be testable offline with a fake model (`ORCH_FAKE=1`). If it is not working at the timebox, stop and use Native or Sequential fallback. Do not gold-plate it.
+
+You are the Lead Architect (`gemini-4-argon`, thinking_level "high" for planning, "medium" for review).
 
 ---
 
-## 1. Overview & Core Philosophy
+## 1. Execution Modes (in priority order)
 
-The orchestration layer coordinates specialized AI roles (Lead Architect, Tile Designer, Logic Engineer, etc.) through topological task DAGs, strict write-path boundaries, and isolated Git worktrees.
-
-Key references:
-- [Original User Prompt](./references/original-prompt.md) - Unaltered base prompt.
-- [Fault Analysis & Improvements](./references/critique-and-improvements.md) - Deep dive into syntax fixes, worktree hazards, and API fallbacks.
-- [Refined Specification (v2)](./references/spec-v2.md) - Bulletproof production spec.
+1. **Native.** Your harness (Antigravity IDE/CLI, Gemini CLI, etc.) offers subagents. Use them, but still obey the roles, file ownership, contracts, and shared notes defined here.
+2. **Orchestrated (default for this project).** Build `scripts/lib/orchestrator.mjs` and drive every wave through it with the Interactions API (or local fake model in test). This is portable, testable, traceable, and demoable.
+3. **Sequential fallback.** Run the same tasks one at a time in the same order with the same ownership rules.
 
 ---
 
-## 2. Directory Structure
+## 2. API & SDK Guidelines
 
-When implementing this skill, generate or maintain the following structure:
+- **Models:** `gemini-4-argon` (lead, architecture, complex modules), `gemini-3.8-flash` (parallel leaf tasks, boilerplate, fast checks), `gemini-3.5-flash-lite` (routing, classification, guardrails).
+- **SDK & Protocol:** Use `@google/genai` >= 2.3.0. For multi-turn stateful subagents, leverage `previous_interaction_id` to continue context in repair loops.
+- **Thinking levels:** `thinking_level` = `"low"` | `"medium"` (default) | `"high"`. Use `"high"` for multi-file debugging, upfront design, and patching; `"low"` for routing and extraction.
+- **Do not pass:** `temperature`, `top_p`, `top_k`, `thinking_budget`, or explicit `cached_content` (caching is automatic).
+- **Long decode jobs:** Output default is 65,536 tokens. For larger tasks, use `{ background: true, maxOutputTokens: ... }` and poll status with exponential backoff until complete.
+- **Spend & Metering:** Argon is $2/1M input, $10/1M output. Flash and Flash-Lite prices are stored as `null` in `agents/pricing.json`. Always meter token volumes, and ensure null pricing never produces `NaN` in budget checks.
 
+---
+
+## 3. Role Registry & Path Ownership
+
+Save to `agents/roles.json` and generate corresponding role system prompts in `agents/prompts/<role>.md`:
+
+```json
+{
+  "roles": [
+    {
+      "name": "lead_architect",
+      "model": "gemini-4-argon",
+      "thinking": "high",
+      "ownsPaths": ["src/contracts.ts", "docs/", "AGENTS.md", "package.json", "tsconfig.json"],
+      "neverTouches": ["src/logic/", "src/render/", "src/ui/", "src/tiles/"]
+    },
+    {
+      "name": "tile_designer",
+      "model": "gemini-4-argon",
+      "thinking": "high",
+      "ownsPaths": ["docs/DESIGN.md"],
+      "neverTouches": ["src/", "tests/"]
+    },
+    {
+      "name": "logic_engineer",
+      "model": "gemini-4-argon",
+      "thinking": "high",
+      "ownsPaths": ["src/logic/", "tests/logic/"],
+      "neverTouches": ["three"]
+    },
+    {
+      "name": "tile_engineer",
+      "model": "gemini-4-argon",
+      "thinking": "high",
+      "ownsPaths": ["src/tiles/painter.ts", "src/tiles/probe.ts", "tests/tiles/"],
+      "neverTouches": ["src/render/"]
+    },
+    {
+      "name": "tile_family_worker",
+      "model": "gemini-3.8-flash",
+      "thinking": "medium",
+      "ownsPaths": ["src/tiles/families/"],
+      "neverTouches": ["src/logic/", "src/render/"]
+    },
+    {
+      "name": "render_engineer",
+      "model": "gemini-4-argon",
+      "thinking": "high",
+      "ownsPaths": ["src/render/"],
+      "neverTouches": ["src/ui/", "src/logic/"]
+    },
+    {
+      "name": "ui_engineer",
+      "model": "gemini-3.8-flash",
+      "thinking": "medium",
+      "ownsPaths": ["src/ui/"],
+      "neverTouches": ["src/render/", "src/logic/"]
+    },
+    {
+      "name": "boilerplate_worker",
+      "model": "gemini-3.8-flash",
+      "thinking": "low",
+      "ownsPaths": ["README.md", "docs/", "vite.config.ts"],
+      "neverTouches": ["src/"]
+    },
+    {
+      "name": "judge_a",
+      "model": "gemini-4-argon",
+      "thinking": "high",
+      "ownsPaths": [],
+      "neverTouches": ["*"]
+    },
+    {
+      "name": "judge_b",
+      "model": "gemini-4-argon",
+      "thinking": "high",
+      "ownsPaths": [],
+      "neverTouches": ["*"]
+    },
+    {
+      "name": "patcher",
+      "model": "gemini-4-argon",
+      "thinking": "high",
+      "ownsPaths": [],
+      "neverTouches": ["tests/", "rubric/", "scripts/gates/"]
+    },
+    {
+      "name": "router",
+      "model": "gemini-3.5-flash-lite",
+      "thinking": "low",
+      "ownsPaths": [],
+      "neverTouches": ["*"]
+    },
+    {
+      "name": "historian",
+      "model": "gemini-3.8-flash",
+      "thinking": "low",
+      "ownsPaths": ["runs/ledger.json", "AGENTS.md", "docs/architecture.html"],
+      "neverTouches": ["src/"]
+    }
+  ]
+}
 ```
-carcassone-3d/
-├── .agents/
-│   └── skills/
-│       └── subagent-orchestrator/ # This skill package
-├── scripts/
-│   ├── lib/
-│   │   ├── orchestrator.mjs       # Main DAG wave dispatcher & runner (<600 lines)
-│   │   ├── adapter.mjs            # Interactions API / offline mock adapter
-│   │   └── ownership.mjs          # Path normalization & ownership validation
-│   └── gates/
-│       └── imports.mjs            # Architectural boundaries gate
-├── agents/
-│   ├── roles.json                 # Role definitions & path permissions
-│   ├── pricing.json               # Cost tables & unmetered token handling
-│   └── prompts/                   # System prompt markdown files per role
-├── runs/
-│   ├── orchestrator/
-│   │   └── trace.jsonl            # Execution audit log
-│   ├── board.jsonl                # Cross-subagent requests
-│   └── ledger.json                # Run memory
-├── tests/
-│   └── orchestrator.test.ts       # Vitest offline mock suite
-└── docs/
-    ├── ORCHESTRATION.md           # Usage and CLI documentation
-    └── architecture.html          # Interactive timeline / Gantt chart
+
+Save to `agents/pricing.json`:
+```json
+{
+  "currency": "USD",
+  "rates": {
+    "gemini-4-argon": { "inputPerMillion": 2.0, "outputPerMillion": 10.0 },
+    "gemini-3.8-flash": { "inputPerMillion": null, "outputPerMillion": null },
+    "gemini-3.5-flash-lite": { "inputPerMillion": null, "outputPerMillion": null }
+  }
+}
 ```
 
 ---
 
-## 3. Step-by-Step Implementation Procedure
+## 4. Orchestrator Library Implementation (`scripts/lib/orchestrator.mjs`)
 
-### Step 1: Environment & Base Branch Setup
-Run the environment verification script:
-```bash
-./.agents/skills/subagent-orchestrator/scripts/verify-setup.sh
-```
-Ensure git branch `integration` exists. If not, branch from current `HEAD`:
-```bash
-git branch integration HEAD
-```
+### 4.1 Core Model Call
+- Signature: `callModel({ role, model, thinking, input, background = false, maxOutputTokens = 65536, previousInteractionId, schema })`.
+- Handles retry with exponential backoff on 429 and 5xx.
+- When `process.env.ORCH_FAKE === '1'`, returns scripted mock responses without network access.
+- Logs every interaction to `runs/orchestrator/trace.jsonl` with `{ ts, taskId, role, model, thinking, inputTokens, outputTokens, costUsd, ms, status }`.
+- Enforces `--budget-usd` and `--max-calls` caps.
 
-### Step 2: Initialize Configuration & Role Registry
-Populate `agents/roles.json` and `agents/pricing.json` using the provided templates:
-- [roles.json](./templates/roles.json)
-- [pricing.json](./templates/pricing.json)
+### 4.2 Worktree Lifecycle & Isolation Guardrails
+Before running tasks:
+1. Ensure the `integration` branch exists (create from `HEAD` if needed).
+2. For each task, create a worktree `wt/<task-id>` on branch `task/<task-id>`.
+3. Symlink root `node_modules` into `wt/<task-id>/node_modules` so acceptance commands (`npx vitest`) run seamlessly without reinstalling.
+4. Inject role system prompt + task goal + full contents of `inputs` + shared blackboard notes (`AGENTS.md`, `runs/board.jsonl`).
+5. Subagents return JSON: `{ files: [{ path, content }], diff?, notes, board: [{ to, request }] }`.
+6. **Deterministic Ownership Enforcement:**
+   - Normalize target paths using `path.resolve` and `path.relative`.
+   - Reject any directory traversal (`..`) or absolute paths.
+   - Strictly reject any write outside `ownsPaths` or within protected paths (`tests/`, `rubric/`, `scripts/gates/`).
+7. Execute `acceptance` commands inside the worktree.
+8. **Repair & Escalation Loop:**
+   - On acceptance failure, re-invoke with failing test log and `previousInteractionId` (up to 2 retry rounds).
+   - On 3rd failure, escalate to `lead_architect` (argon high) to patch, relax an unreasonable command, or re-plan.
+9. **Review Gate:** Lead reviews interface diffs against `src/contracts.ts` and runs `scripts/gates/imports.mjs` (logic cannot import `three`; render cannot import `ui`; ui cannot import `render`).
+10. Merge `task/<task-id>` into `integration` with `--no-ff`.
+11. **Guaranteed Teardown:** Wrap in `try...finally` to always run `git worktree remove --force` and clean up task branches.
 
-Populate `agents/prompts/` with role-specific system prompts enforcing path boundaries and output schemas.
+---
 
-### Step 3: Implement Deterministic Ownership Checker
-In `scripts/lib/ownership.mjs`:
-- Normalize target paths against worktree root.
-- Block path traversal (`..` or absolute paths).
-- Block writes to `PROTECTED_PATHS` (`tests/`, `rubric/`, `scripts/gates/`).
-- Reject any write outside task `ownsPaths`.
+## 5. Offline Testing Harness (`ORCH_FAKE=1`)
 
-### Step 4: Implement Protocol Adapter (`scripts/lib/adapter.mjs`)
-- Support `ORCH_FAKE=1` offline mock model for instant unit testing.
-- Support `@google/genai` Interactions API with automatic exponential backoff on 429/5xx.
-- Thread `previousInteractionId` across repair attempts.
-- Handle `null` pricing safely in spend calculations.
-
-### Step 5: Implement Core Orchestrator (`scripts/lib/orchestrator.mjs`)
-- Keep total line count under 600 lines.
-- Implement topological wave execution (`runPlan(plan, { concurrency })`).
-- Wrap task execution in worktree lifecycles with guaranteed cleanup in `finally`.
-- Symlink `node_modules` into worktrees to enable `npx vitest` without overhead.
-- Centralize appends to `runs/orchestrator/trace.jsonl` and `runs/board.jsonl`.
-
-### Step 6: Verify Offline with Vitest
-Run offline test suite:
+Implement `tests/orchestrator.test.ts` to run under Vitest offline:
 ```bash
 ORCH_FAKE=1 npx vitest run tests/orchestrator.test.ts
 ```
-The test suite must verify:
-1. Topological DAG order (tasks run only when dependencies complete).
-2. Write ownership rejection before touching disk.
-3. Repair loop with `previousInteractionId`.
-4. Escalation to Lead Architect upon 2 consecutive failures.
-5. Spend cap and call cap stops.
-6. Trace file generation.
-
-### Step 7: Documentation & Commit
-1. Document CLI flags and modes in `docs/ORCHESTRATION.md`.
-2. Append execution notes and lessons learned to `AGENTS.md`.
-3. Commit clean baseline to `integration`.
+The fake model suite must verify:
+- DAG topological wave ordering (dependent tasks wait for upstream outputs).
+- Ownership violations rejected before disk modification.
+- Repair loop threads `previousInteractionId` across retries.
+- Escalation to Lead triggers after 2 failed attempts.
+- Spend caps halt scheduling and print resume command.
+- Trace lines are written cleanly to `runs/orchestrator/trace.jsonl`.
 
 ---
 
-## 4. Operational Guardrails
+## 6. Definition of Done (Prompt 0)
 
-- **No Remote Side Effects:** The orchestrator never pushes to remotes or deploys without explicit interactive confirmation.
-- **Strict Worktree Teardown:** Never leave orphaned `wt/*` directories or dangling branches.
-- **Budget Protection:** Terminate immediately when `--budget-usd` or `--max-calls` is reached, leaving a resumable command.
+1. `npm test` passes orchestrator tests offline using `ORCH_FAKE=1`.
+2. A live smoke test runs a simple 2-task wave (one Argon, one Flash) and records trace in `trace.jsonl`.
+3. `agents/roles.json`, `agents/pricing.json`, and `docs/ORCHESTRATION.md` exist.
+4. Append lessons learned to `AGENTS.md`, commit on `integration`, and stop. **Do not start the game.**
