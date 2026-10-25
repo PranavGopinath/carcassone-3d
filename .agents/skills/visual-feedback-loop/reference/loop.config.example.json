@@ -1,6 +1,6 @@
 {
   "_fieldNotes": {
-    "hooks": "Names of functions on window[global]. null = optional. ready: resolves when textures are loaded; if null, wait for document.fonts.ready plus one renderAt(0). injectDefect(name): optional, lets the golden set break the real scene (e.g. 'floating-prop', 'hovering-meeple', 'pop-in'). Gameplay hooks: playAt(t) renders live play at play-clock time t with every tween (tile drop, meeple drop, highlights, score popups, view morph) driven by t; botMove() lets the deterministic bot choose and apply its next move including a meeple, animated on the play clock; showLegalMoves(on) toggles placement highlights; setView(mode, instant?) switches view. loadFixture('fixture-midgame') must give a board where the scripted bot moves complete at least one road and one city.",
+    "hooks": "Names of functions on window[global]. null = optional. ready: resolves when textures are loaded; if null, wait for document.fonts.ready plus one renderAt(0). injectDefect(name): optional, lets the golden set break the real scene (e.g. 'floating-prop', 'hovering-meeple', 'pop-in'). Gameplay hooks: playAt(t) renders live play at play-clock time t with every tween (tile drop, meeple drop, highlights, score popups, view morph) driven by t; botMove() lets the deterministic bot choose and apply its next move including a meeple, animated on the play clock; showLegalMoves(on) toggles placement highlights; setView(mode, instant?) switches view. loadFixture('fixture-midgame') must give a board where the scripted bot moves complete at least one road and one city. audit() must also return tileLabels (screen position of each tile per shot, for marks) and viewConsistency (per tile, the features and objects drawn in 2D vs present in 3D, with mismatches).",
     "timeUnit": "'s' or 'ms': the unit renderAt expects.",
     "frameDiff": "Spike = per-cell (grid x grid) or second-order changed-pixel fraction > spikeFactor x its segment median.",
     "shots": "Canvas-clipped shots from captureShot.",
@@ -12,7 +12,9 @@
     "limits": "plateauIterations: non-improving iterations in a row before escalating to lead_architect. budgetUsd is the real cap.",
     "timeline.motionSegments": "Cinematic segments sent to judge_a as clipped videos. Gameplay videos are always sent too.",
     "views": "Every view the game has. Each iteration captures and judges all of them (hard rule 9).",
-    "gameplay": "Scripted play, captured full-page at fps on the play clock. Steps: {at, call, args} invokes a hook; {at, click} is a real Playwright click on a selector. perView scripts run once per view; others once from startView. label is shown to judges as the expected event."
+    "gameplay": "Scripted play, captured full-page at fps on the play clock. Steps: {at, call, args} invokes a hook; {at, click} is a real Playwright click on a selector. perView scripts run once per view; others once from startView. label is shown to judges as the expected event.",
+    "outOfScope": "Areas owned by someone else. Judges ignore them; patches that change them are rejected (hard rule 11).",
+    "outOfScopePaths": "Files that implement out-of-scope areas (e.g. the background module). Fill in once known; diffs touching them are rejected."
   },
   "name": "tiers",
   "devCommand": "npm run dev -- --port 5173 --strictPort",
@@ -57,11 +59,7 @@
     "underside-slab"
   ],
   "pageShots": [{ "id": "ui-2d", "view": "2d", "t": 1.5 }, { "id": "ui-3d", "view": "3d", "t": 7 }],
-  "references": [
-    "public/reference/diorama-style-ref.png",
-    "public/reference/carcassonne-layout.jpg",
-    "public/reference/ui-layout-ref.jpg"
-  ],
+  "references": ["public/reference/diorama-style-ref.png", "public/reference/carcassonne-layout.jpg"],
   "rubric": "rubric/visual.json",
   "protectedPaths": [
     "rubric/",
@@ -108,5 +106,10 @@
         ]
       }
     ]
-  }
+  },
+  "outOfScope": [
+    "Page and scene background, sky and clouds behind the board",
+    "HUD layout and styling (panels, buttons, typography)"
+  ],
+  "outOfScopePaths": []
 }
