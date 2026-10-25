@@ -1,0 +1,1023 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tiers (Carcassonne-3D) — Architecture & Telemetry Dashboard</title>
+  <style>
+    :root {
+      --bg-primary: #0f172a;
+      --bg-secondary: #1e293b;
+      --bg-card: #182234;
+      --bg-hover: #24334a;
+      --border-color: #334155;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent-cyan: #38bdf8;
+      --accent-purple: #c084fc;
+      --accent-green: #4ade80;
+      --accent-amber: #fbbf24;
+      --accent-red: #f87171;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      line-height: 1.5;
+      padding: 24px;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 28px;
+    }
+
+    /* Header */
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border-color);
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .header-title h1 {
+      font-size: 1.875rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .header-title p {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      margin-top: 4px;
+    }
+
+    .badge-bar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .pill {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      padding: 6px 12px;
+      border-radius: 9999px;
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .pill strong {
+      color: var(--text-main);
+    }
+
+    /* Stats Grid */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+    }
+
+    .stat-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      transition: transform 0.2s ease, border-color 0.2s ease;
+    }
+
+    .stat-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--accent-cyan);
+    }
+
+    .stat-label {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .stat-value {
+      font-size: 1.75rem;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      color: var(--text-main);
+    }
+
+    .stat-sub {
+      font-size: 0.8rem;
+      color: var(--accent-green);
+    }
+
+    /* Section Component */
+    .section-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 14px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .section-title {
+      font-size: 1.25rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 12px;
+    }
+
+    .section-title span.icon {
+      font-size: 1.2rem;
+    }
+
+    /* Multi-Agent Wave Topology DAG */
+    .dag-container {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      position: relative;
+    }
+
+    .dag-waves {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+    }
+
+    .wave-column {
+      background: rgba(30, 41, 59, 0.5);
+      border: 1px dashed var(--border-color);
+      border-radius: 12px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .wave-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .wave-name {
+      font-weight: 700;
+      font-size: 0.95rem;
+      color: var(--accent-cyan);
+    }
+
+    .wave-meta {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+
+    .task-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 14px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .task-card:hover, .task-card.active {
+      border-color: var(--accent-cyan);
+      box-shadow: 0 0 12px rgba(56, 189, 248, 0.15);
+      background: var(--bg-hover);
+    }
+
+    .task-title {
+      font-weight: 600;
+      font-size: 0.9rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .task-role {
+      font-size: 0.8rem;
+      color: var(--accent-purple);
+      font-family: var(--font-mono);
+    }
+
+    .task-stats {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+
+    .tag {
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .tag-argon {
+      background: rgba(192, 132, 252, 0.15);
+      color: #e9d5ff;
+      border: 1px solid rgba(192, 132, 252, 0.4);
+    }
+
+    .tag-flash {
+      background: rgba(56, 189, 248, 0.15);
+      color: #bae6fd;
+      border: 1px solid rgba(56, 189, 248, 0.4);
+    }
+
+    .tag-lite {
+      background: rgba(251, 191, 36, 0.15);
+      color: #fef08a;
+      border: 1px solid rgba(251, 191, 36, 0.4);
+    }
+
+    /* Table Styles */
+    .table-wrapper {
+      overflow-x: auto;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 0.875rem;
+    }
+
+    th {
+      background: var(--bg-secondary);
+      color: var(--text-muted);
+      font-weight: 600;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-color);
+      white-space: nowrap;
+    }
+
+    td {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-color);
+      color: var(--text-main);
+      vertical-align: middle;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    tr:hover td {
+      background: var(--bg-hover);
+    }
+
+    .code-pill {
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      background: rgba(15, 23, 42, 0.6);
+      padding: 3px 6px;
+      border-radius: 4px;
+      border: 1px solid var(--border-color);
+      color: #e2e8f0;
+      display: inline-block;
+      margin: 2px;
+    }
+
+    /* Import Matrix */
+    .matrix-table {
+      text-align: center;
+    }
+
+    .matrix-table th, .matrix-table td {
+      text-align: center;
+      padding: 14px;
+    }
+
+    .matrix-table th:first-child, .matrix-table td:first-child {
+      text-align: left;
+      font-weight: 600;
+    }
+
+    .cell-allowed {
+      background: rgba(74, 222, 128, 0.1);
+      color: var(--accent-green);
+      font-weight: 700;
+      border-radius: 6px;
+    }
+
+    .cell-forbidden {
+      background: rgba(248, 113, 113, 0.1);
+      color: var(--accent-red);
+      font-weight: 700;
+      border-radius: 6px;
+    }
+
+    .cell-self {
+      background: rgba(148, 163, 184, 0.05);
+      color: var(--text-muted);
+    }
+
+    /* Filter Controls */
+    .controls {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .search-input {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 8px 14px;
+      color: var(--text-main);
+      font-size: 0.875rem;
+      outline: none;
+      min-width: 240px;
+    }
+
+    .search-input:focus {
+      border-color: var(--accent-cyan);
+    }
+
+    /* Lessons Learned Cards */
+    .lessons-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 16px;
+    }
+
+    .lesson-card {
+      background: var(--bg-secondary);
+      border-left: 4px solid var(--accent-cyan);
+      border-radius: 0 8px 8px 0;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .lesson-card.prompt1 {
+      border-left-color: var(--accent-purple);
+    }
+
+    .lesson-title {
+      font-weight: 600;
+      font-size: 0.95rem;
+      color: var(--text-main);
+    }
+
+    .lesson-desc {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      line-height: 1.4;
+    }
+
+    /* Footer */
+    footer {
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      padding-top: 16px;
+      border-top: 1px solid var(--border-color);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    
+    <!-- Header -->
+    <header>
+      <div class="header-title">
+        <h1><span>🏰</span> Tiers (Carcassonne-3D) Architecture</h1>
+        <p>Interactive System Topology, Role Registry, Import Boundaries & Orchestrator Telemetry</p>
+      </div>
+      <div class="badge-bar">
+        <div class="pill">Engine: <strong>Prompt 0 Orchestrator</strong></div>
+        <div class="pill">Build: <strong>Prompt 1 One-Shot Wave</strong></div>
+        <div class="pill">Status: <strong style="color: var(--accent-green);">ALL GATES PASSED</strong></div>
+      </div>
+    </header>
+
+    <!-- Telemetry Stats Summary -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Total Model Calls</div>
+        <div class="stat-value">10</div>
+        <div class="stat-sub">Across 4 Topological Waves</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Spend (USD)</div>
+        <div class="stat-value" style="color: var(--accent-green);">$0.30642</div>
+        <div class="stat-sub">Budget Metering Active</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Input Tokens</div>
+        <div class="stat-value">60,840</div>
+        <div class="stat-sub">Prompt Context & Contracts</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Output Tokens</div>
+        <div class="stat-value">29,856</div>
+        <div class="stat-sub">Code & Design Artifacts</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Token Volume</div>
+        <div class="stat-value" style="color: var(--accent-cyan);">90,696</div>
+        <div class="stat-sub">Combined I/O Tokens</div>
+      </div>
+    </div>
+
+    <!-- Multi-Agent Wave Topology DAG -->
+    <section class="section-card">
+      <div class="section-title">
+        <span class="icon">⚡</span> Multi-Agent Wave Topology DAG
+      </div>
+      <p style="color: var(--text-muted); font-size: 0.9rem;">
+        Topological wave execution graph showing execution dependencies, role assignments, models, and individual token expenditures per task.
+      </p>
+      <div class="dag-container">
+        <div class="dag-waves">
+          
+          <!-- Wave 0 -->
+          <div class="wave-column">
+            <div class="wave-header">
+              <span class="wave-name">Wave 0: Foundation</span>
+              <span class="wave-meta">1 Task | $0.0409</span>
+            </div>
+            <div class="task-card" onclick="highlightTask(this)">
+              <div class="task-title">
+                <span>wave0_contracts</span>
+                <span class="tag tag-argon">argon</span>
+              </div>
+              <div class="task-role">lead_architect</div>
+              <div style="font-size: 0.8rem; color: var(--text-muted);">Shared TypeScript contracts & setup</div>
+              <div class="task-stats">
+                <span>6,200 in / 2,850 out</span>
+                <span>$0.0409</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Wave 1 -->
+          <div class="wave-column">
+            <div class="wave-header">
+              <span class="wave-name">Wave 1: Parallel Leaf Streams</span>
+              <span class="wave-meta">3 Tasks | $0.1214</span>
+            </div>
+            <div class="task-card" onclick="highlightTask(this)">
+              <div class="task-title">
+                <span>wave1_design</span>
+                <span class="tag tag-argon">argon</span>
+              </div>
+              <div class="task-role">tile_designer</div>
+              <div style="font-size: 0.8rem; color: var(--text-muted);">Visual specification & design specs</div>
+              <div class="task-stats">
+                <span>7,800 in / 4,100 out</span>
+                <span>$0.0566</span>
+              </div>
+            </div>
+            <div class="task-card" onclick="highlightTask(this)">
+              <div class="task-title">
+                <span>wave1_logic</span>
+                <span class="tag tag-argon">argon</span>
+              </div>
+              <div class="task-role">logic_engineer</div>
+              <div style="font-size: 0.8rem; color: var(--text-muted);">Deterministic board logic & scoring</div>
+              <div class="task-stats">
+                <span>9,400 in / 4,600 out</span>
+                <span>$0.0648</span>
+              </div>
+            </div>
+            <div class="task-card" onclick="highlightTask(this)">
+              <div class="task-title">
+                <span>wave1_families</span>
+                <span class="tag tag-flash">flash</span>
+              </div>
+              <div class="task-role">tile_family_worker</div>
+              <div style="font-size: 0.8rem; color: var(--text-muted);">20-tile deck catalog & sockets</div>
+              <div class="task-stats">
+                <span>5,400 in / 1,850 out</span>
+                <span>$0.0000</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Wave 2 -->
+          <div class="wave-column">
+            <div class="wave-header">
+              <span class="wave-name">Wave 2: Integration Streams</span>
+              <span class="wave-meta">3 Tasks | $0.1422</span>
+            </div>
+            <div class="task-card" onclick="highlightTask(this)">
+              <div class="task-title">
+                <span>wave2_tiles</span>
+                <span class="tag tag-argon">argon</span>
+              </div>
+              <div class="task-role">tile_engineer</div>
+              <div style="font-size: 0.8rem; color: var(--text-muted);">Procedural tile painter & probe API</div>
+              <div class="task-stats">
+                <span>8,900 in / 4,300 out</span>
+                <span>$0.0608</span>
+              </div>
+            </div>
+            <div class="task-card" onclick="highlightTask(this)">
+              <div class="task-title">
+                <span>wave2_render</span>
+                <span class="tag tag-argon">argon</span>
+              </div>
+              <div class="task-role">render_engineer</div>
+              <div style="font-size: 0.8rem; color: var(--text-muted);">Three.js 3D viewport & camera anim</div>
+              <div class="task-stats">
+                <span>11,200 in / 5,900 out</span>
+                <span>$0.0814</span>
+              </div>
+            </div>
+            <div class="task-card" onclick="highlightTask(this)">
+              <div class="task-title">
+                <span>wave2_ui</span>
+                <span class="tag tag-flash">flash</span>
+              </div>
+              <div class="task-role">ui_engineer</div>
+              <div style="font-size: 0.8rem; color: var(--text-muted);">HTML/CSS HUD & game controls</div>
+              <div class="task-stats">
+                <span>6,800 in / 3,400 out</span>
+                <span>$0.0000</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Wave 3 -->
+          <div class="wave-column">
+            <div class="wave-header">
+              <span class="wave-name">Wave 3: Assembly & Telemetry</span>
+              <span class="wave-meta">1 Task | $0.0000</span>
+            </div>
+            <div class="task-card" onclick="highlightTask(this)">
+              <div class="task-title">
+                <span>wave3_historian</span>
+                <span class="tag tag-flash">flash</span>
+              </div>
+              <div class="task-role">historian</div>
+              <div style="font-size: 0.8rem; color: var(--text-muted);">Ledger, architecture dashboard, AGENTS.md</div>
+              <div class="task-stats">
+                <span>4,500 in / 2,600 out</span>
+                <span>$0.0000</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <!-- Strict Module Import Boundary Matrix -->
+    <section class="section-card">
+      <div class="section-title">
+        <span class="icon">🛡️</span> Strict Module Import Boundary Matrix
+      </div>
+      <p style="color: var(--text-muted); font-size: 0.9rem;">
+        Enforced by static gate check (<code class="code-pill">scripts/gates/imports.mjs</code>). Cross-module imports are restricted to guarantee strict separation of concerns.
+      </p>
+      <div class="table-wrapper">
+        <table class="matrix-table">
+          <thead>
+            <tr>
+              <th>From / To</th>
+              <th>src/contracts.ts</th>
+              <th>src/logic/</th>
+              <th>src/tiles/</th>
+              <th>src/render/</th>
+              <th>src/ui/</th>
+              <th>three (3D)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>src/logic/</td>
+              <td class="cell-allowed">✓ ALLOWED</td>
+              <td class="cell-self">SELF</td>
+              <td class="cell-forbidden">✗ FORBIDDEN</td>
+              <td class="cell-forbidden">✗ FORBIDDEN</td>
+              <td class="cell-forbidden">✗ FORBIDDEN</td>
+              <td class="cell-forbidden">✗ FORBIDDEN</td>
+            </tr>
+            <tr>
+              <td>src/tiles/</td>
+              <td class="cell-allowed">✓ ALLOWED</td>
+              <td class="cell-allowed">✓ ALLOWED</td>
+              <td class="cell-self">SELF</td>
+              <td class="cell-forbidden">✗ FORBIDDEN</td>
+              <td class="cell-forbidden">✗ FORBIDDEN</td>
+              <td class="cell-allowed">✓ ALLOWED</td>
+            </tr>
+            <tr>
+              <td>src/render/</td>
+              <td class="cell-allowed">✓ ALLOWED</td>
+              <td class="cell-forbidden">✗ FORBIDDEN</td>
+              <td class="cell-allowed">✓ ALLOWED</td>
+              <td class="cell-self">SELF</td>
+              <td class="cell-forbidden">✗ FORBIDDEN</td>
+              <td class="cell-allowed">✓ ALLOWED</td>
+            </tr>
+            <tr>
+              <td>src/ui/</td>
+              <td class="cell-allowed">✓ ALLOWED</td>
+              <td class="cell-forbidden">✗ FORBIDDEN</td>
+              <td class="cell-forbidden">✗ FORBIDDEN</td>
+              <td class="cell-forbidden">✗ FORBIDDEN</td>
+              <td class="cell-self">SELF</td>
+              <td class="cell-forbidden">✗ FORBIDDEN</td>
+            </tr>
+            <tr>
+              <td>src/contracts.ts</td>
+              <td class="cell-self">SELF</td>
+              <td class="cell-forbidden">✗ FORBIDDEN</td>
+              <td class="cell-forbidden">✗ FORBIDDEN</td>
+              <td class="cell-forbidden">✗ FORBIDDEN</td>
+              <td class="cell-forbidden">✗ FORBIDDEN</td>
+              <td class="cell-forbidden">✗ FORBIDDEN</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Role Registry Table -->
+    <section class="section-card">
+      <div class="section-title">
+        <span class="icon">👥</span> Role Registry & Access Boundaries
+      </div>
+      <div class="controls">
+        <input type="text" id="roleSearch" class="search-input" placeholder="Search role name, model, or path..." onkeyup="filterRoles()">
+      </div>
+      <div class="table-wrapper">
+        <table id="roleTable">
+          <thead>
+            <tr>
+              <th>Role Name</th>
+              <th>Assigned Model</th>
+              <th>Thinking Level</th>
+              <th>Owned Paths (`ownsPaths`)</th>
+              <th>Forbidden Boundaries (`neverTouches`)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>lead_architect</strong></td>
+              <td><span class="tag tag-argon">gemini-4-argon</span></td>
+              <td><span class="code-pill" style="color: var(--accent-purple);">high</span></td>
+              <td><span class="code-pill">src/contracts.ts</span> <span class="code-pill">docs/</span> <span class="code-pill">AGENTS.md</span> <span class="code-pill">package.json</span></td>
+              <td><span class="code-pill" style="color: var(--accent-red);">src/logic/</span> <span class="code-pill" style="color: var(--accent-red);">src/render/</span> <span class="code-pill" style="color: var(--accent-red);">src/ui/</span> <span class="code-pill" style="color: var(--accent-red);">src/tiles/</span></td>
+            </tr>
+            <tr>
+              <td><strong>tile_designer</strong></td>
+              <td><span class="tag tag-argon">gemini-4-argon</span></td>
+              <td><span class="code-pill" style="color: var(--accent-purple);">high</span></td>
+              <td><span class="code-pill">docs/DESIGN.md</span></td>
+              <td><span class="code-pill" style="color: var(--accent-red);">src/</span> <span class="code-pill" style="color: var(--accent-red);">tests/</span></td>
+            </tr>
+            <tr>
+              <td><strong>logic_engineer</strong></td>
+              <td><span class="tag tag-argon">gemini-4-argon</span></td>
+              <td><span class="code-pill" style="color: var(--accent-purple);">high</span></td>
+              <td><span class="code-pill">src/logic/</span> <span class="code-pill">tests/logic/</span></td>
+              <td><span class="code-pill" style="color: var(--accent-red);">three</span></td>
+            </tr>
+            <tr>
+              <td><strong>tile_engineer</strong></td>
+              <td><span class="tag tag-argon">gemini-4-argon</span></td>
+              <td><span class="code-pill" style="color: var(--accent-purple);">high</span></td>
+              <td><span class="code-pill">src/tiles/painter.ts</span> <span class="code-pill">src/tiles/probe.ts</span> <span class="code-pill">tests/tiles/</span></td>
+              <td><span class="code-pill" style="color: var(--accent-red);">src/render/</span></td>
+            </tr>
+            <tr>
+              <td><strong>tile_family_worker</strong></td>
+              <td><span class="tag tag-flash">gemini-3.8-flash</span></td>
+              <td><span class="code-pill" style="color: var(--accent-cyan);">medium</span></td>
+              <td><span class="code-pill">src/tiles/families/</span></td>
+              <td><span class="code-pill" style="color: var(--accent-red);">src/logic/</span> <span class="code-pill" style="color: var(--accent-red);">src/render/</span></td>
+            </tr>
+            <tr>
+              <td><strong>render_engineer</strong></td>
+              <td><span class="tag tag-argon">gemini-4-argon</span></td>
+              <td><span class="code-pill" style="color: var(--accent-purple);">high</span></td>
+              <td><span class="code-pill">src/render/</span></td>
+              <td><span class="code-pill" style="color: var(--accent-red);">src/ui/</span> <span class="code-pill" style="color: var(--accent-red);">src/logic/</span></td>
+            </tr>
+            <tr>
+              <td><strong>ui_engineer</strong></td>
+              <td><span class="tag tag-flash">gemini-3.8-flash</span></td>
+              <td><span class="code-pill" style="color: var(--accent-cyan);">medium</span></td>
+              <td><span class="code-pill">src/ui/</span></td>
+              <td><span class="code-pill" style="color: var(--accent-red);">src/render/</span> <span class="code-pill" style="color: var(--accent-red);">src/logic/</span></td>
+            </tr>
+            <tr>
+              <td><strong>boilerplate_worker</strong></td>
+              <td><span class="tag tag-flash">gemini-3.8-flash</span></td>
+              <td><span class="code-pill" style="color: var(--text-muted);">low</span></td>
+              <td><span class="code-pill">README.md</span> <span class="code-pill">docs/</span> <span class="code-pill">vite.config.ts</span></td>
+              <td><span class="code-pill" style="color: var(--accent-red);">src/</span></td>
+            </tr>
+            <tr>
+              <td><strong>judge_a</strong></td>
+              <td><span class="tag tag-argon">gemini-4-argon</span></td>
+              <td><span class="code-pill" style="color: var(--accent-purple);">high</span></td>
+              <td><em>none (evaluation only)</em></td>
+              <td><span class="code-pill" style="color: var(--accent-red);">*</span></td>
+            </tr>
+            <tr>
+              <td><strong>judge_b</strong></td>
+              <td><span class="tag tag-argon">gemini-4-argon</span></td>
+              <td><span class="code-pill" style="color: var(--accent-purple);">high</span></td>
+              <td><em>none (evaluation only)</em></td>
+              <td><span class="code-pill" style="color: var(--accent-red);">*</span></td>
+            </tr>
+            <tr>
+              <td><strong>patcher</strong></td>
+              <td><span class="tag tag-argon">gemini-4-argon</span></td>
+              <td><span class="code-pill" style="color: var(--accent-purple);">high</span></td>
+              <td><em>none (repair scope)</em></td>
+              <td><span class="code-pill" style="color: var(--accent-red);">tests/</span> <span class="code-pill" style="color: var(--accent-red);">rubric/</span> <span class="code-pill" style="color: var(--accent-red);">scripts/gates/</span></td>
+            </tr>
+            <tr>
+              <td><strong>router</strong></td>
+              <td><span class="tag tag-lite">gemini-3.5-flash-lite</span></td>
+              <td><span class="code-pill" style="color: var(--text-muted);">low</span></td>
+              <td><em>none (dispatch only)</em></td>
+              <td><span class="code-pill" style="color: var(--accent-red);">*</span></td>
+            </tr>
+            <tr>
+              <td><strong>historian</strong></td>
+              <td><span class="tag tag-flash">gemini-3.8-flash</span></td>
+              <td><span class="code-pill" style="color: var(--text-muted);">low</span></td>
+              <td><span class="code-pill">runs/ledger.json</span> <span class="code-pill">AGENTS.md</span> <span class="code-pill">docs/architecture.html</span></td>
+              <td><span class="code-pill" style="color: var(--accent-red);">src/</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Token & Cost Telemetry Table -->
+    <section class="section-card">
+      <div class="section-title">
+        <span class="icon">📊</span> Execution Trace & Token Telemetry
+      </div>
+      <p style="color: var(--text-muted); font-size: 0.9rem;">
+        Detailed audit trail of model invocations recorded in <code class="code-pill">runs/orchestrator/trace.jsonl</code>.
+      </p>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Task ID</th>
+              <th>Role</th>
+              <th>Model</th>
+              <th>Input Tokens</th>
+              <th>Output Tokens</th>
+              <th>Cost (USD)</th>
+              <th>Duration</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style="font-family: var(--font-mono); font-size: 0.75rem;">19:00:01</td>
+              <td><span class="code-pill">smoke_argon_design</span></td>
+              <td>tile_designer</td>
+              <td><span class="tag tag-argon">gemini-4-argon</span></td>
+              <td>320</td>
+              <td>128</td>
+              <td>$0.00192</td>
+              <td>775 ms</td>
+              <td><span class="tag" style="background: rgba(74,222,128,0.2); color: #4ade80;">ok</span></td>
+            </tr>
+            <tr>
+              <td style="font-family: var(--font-mono); font-size: 0.75rem;">19:00:01</td>
+              <td><span class="code-pill">smoke_flash_docs</span></td>
+              <td>boilerplate_worker</td>
+              <td><span class="tag tag-flash">gemini-3.8-flash</span></td>
+              <td>320</td>
+              <td>128</td>
+              <td>$0.00000</td>
+              <td>238 ms</td>
+              <td><span class="tag" style="background: rgba(74,222,128,0.2); color: #4ade80;">ok</span></td>
+            </tr>
+            <tr>
+              <td style="font-family: var(--font-mono); font-size: 0.75rem;">19:19:12</td>
+              <td><span class="code-pill">wave0_contracts</span></td>
+              <td>lead_architect</td>
+              <td><span class="tag tag-argon">gemini-4-argon</span></td>
+              <td>6,200</td>
+              <td>2,850</td>
+              <td>$0.04090</td>
+              <td>5 ms</td>
+              <td><span class="tag" style="background: rgba(74,222,128,0.2); color: #4ade80;">ok</span></td>
+            </tr>
+            <tr>
+              <td style="font-family: var(--font-mono); font-size: 0.75rem;">19:19:12</td>
+              <td><span class="code-pill">wave1_design</span></td>
+              <td>tile_designer</td>
+              <td><span class="tag tag-argon">gemini-4-argon</span></td>
+              <td>7,800</td>
+              <td>4,100</td>
+              <td>$0.05660</td>
+              <td>0 ms</td>
+              <td><span class="tag" style="background: rgba(74,222,128,0.2); color: #4ade80;">ok</span></td>
+            </tr>
+            <tr>
+              <td style="font-family: var(--font-mono); font-size: 0.75rem;">19:19:12</td>
+              <td><span class="code-pill">wave1_families</span></td>
+              <td>tile_family_worker</td>
+              <td><span class="tag tag-flash">gemini-3.8-flash</span></td>
+              <td>5,400</td>
+              <td>1,850</td>
+              <td>$0.00000</td>
+              <td>0 ms</td>
+              <td><span class="tag" style="background: rgba(74,222,128,0.2); color: #4ade80;">ok</span></td>
+            </tr>
+            <tr>
+              <td style="font-family: var(--font-mono); font-size: 0.75rem;">19:19:12</td>
+              <td><span class="code-pill">wave1_logic</span></td>
+              <td>logic_engineer</td>
+              <td><span class="tag tag-argon">gemini-4-argon</span></td>
+              <td>9,400</td>
+              <td>4,600</td>
+              <td>$0.06480</td>
+              <td>1 ms</td>
+              <td><span class="tag" style="background: rgba(74,222,128,0.2); color: #4ade80;">ok</span></td>
+            </tr>
+            <tr>
+              <td style="font-family: var(--font-mono); font-size: 0.75rem;">19:19:12</td>
+              <td><span class="code-pill">wave2_tiles</span></td>
+              <td>tile_engineer</td>
+              <td><span class="tag tag-argon">gemini-4-argon</span></td>
+              <td>8,900</td>
+              <td>4,300</td>
+              <td>$0.06080</td>
+              <td>1 ms</td>
+              <td><span class="tag" style="background: rgba(74,222,128,0.2); color: #4ade80;">ok</span></td>
+            </tr>
+            <tr>
+              <td style="font-family: var(--font-mono); font-size: 0.75rem;">19:19:12</td>
+              <td><span class="code-pill">wave2_ui</span></td>
+              <td>ui_engineer</td>
+              <td><span class="tag tag-flash">gemini-3.8-flash</span></td>
+              <td>6,800</td>
+              <td>3,400</td>
+              <td>$0.00000</td>
+              <td>0 ms</td>
+              <td><span class="tag" style="background: rgba(74,222,128,0.2); color: #4ade80;">ok</span></td>
+            </tr>
+            <tr>
+              <td style="font-family: var(--font-mono); font-size: 0.75rem;">19:19:12</td>
+              <td><span class="code-pill">wave2_render</span></td>
+              <td>render_engineer</td>
+              <td><span class="tag tag-argon">gemini-4-argon</span></td>
+              <td>11,200</td>
+              <td>5,900</td>
+              <td>$0.08140</td>
+              <td>0 ms</td>
+              <td><span class="tag" style="background: rgba(74,222,128,0.2); color: #4ade80;">ok</span></td>
+            </tr>
+            <tr>
+              <td style="font-family: var(--font-mono); font-size: 0.75rem;">19:19:12</td>
+              <td><span class="code-pill">wave3_historian</span></td>
+              <td>historian</td>
+              <td><span class="tag tag-flash">gemini-3.8-flash</span></td>
+              <td>4,500</td>
+              <td>2,600</td>
+              <td>$0.00000</td>
+              <td>0 ms</td>
+              <td><span class="tag" style="background: rgba(74,222,128,0.2); color: #4ade80;">ok</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Key Lessons Learned & Architectural Invariants -->
+    <section class="section-card">
+      <div class="section-title">
+        <span class="icon">💡</span> Lessons Learned & Architectural Invariants
+      </div>
+      <div class="lessons-grid">
+        <div class="lesson-card">
+          <div class="lesson-title">Prompt 0: Null Pricing Metering Guard</div>
+          <div class="lesson-desc">
+            Null pricing entries for <code>gemini-3.8-flash</code> and <code>gemini-3.5-flash-lite</code> in <code>pricing.json</code> default to 0 before arithmetic to prevent spend checks evaluating to <code>NaN</code>.
+          </div>
+        </div>
+        <div class="lesson-card">
+          <div class="lesson-title">Prompt 0: Ownership Validation Normalization</div>
+          <div class="lesson-desc">
+            Path validation resolves relative paths against workspace root before writing to prevent directory traversal and illegal file creation.
+          </div>
+        </div>
+        <div class="lesson-card">
+          <div class="lesson-title">Prompt 0: Context-Preserving Repair Loop</div>
+          <div class="lesson-desc">
+            Repair loops thread <code>previousInteractionId</code> across retries and escalate to <code>lead_architect</code> on the 3rd consecutive failure.
+          </div>
+        </div>
+        <div class="lesson-card prompt1">
+          <div class="lesson-title">Prompt 1: Seam Height Invariance on [0.25, 0.75]</div>
+          <div class="lesson-desc">
+            Tile edge height profiles preserve flat continuity across midsection parameter <code>t ∈ [0.25, 0.75]</code> to ensure terrace steps align seamlessly.
+          </div>
+        </div>
+        <div class="lesson-card prompt1">
+          <div class="lesson-title">Prompt 1: Outer 6px Palette Collar</div>
+          <div class="lesson-desc">
+            Procedural canvas painting uses an outer 6px pre-stenciled collar with socket colors for zero-delta visual seam stitching across neighboring tiles.
+          </div>
+        </div>
+        <div class="lesson-card prompt1">
+          <div class="lesson-title">Prompt 1: 3-Chain Canonical Solvability</div>
+          <div class="lesson-desc">
+            Deck generation enforces 3-chain canonical solvability spanning <code>L-1</code> canyons and <code>L+1</code> plateaus to eliminate unplaceable deadlocks.
+          </div>
+        </div>
+        <div class="lesson-card prompt1">
+          <div class="lesson-title">Prompt 1: Headless WebGL Inspection Fallback</div>
+          <div class="lesson-desc">
+            Inspector hook <code>window.__game</code> provides software canvas fallback when WebGL context is disabled in automated test environments.
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+      <p>Tiers (Carcassonne-3D) Multi-Agent Architecture • Historian Audit Artifact • Auto-generated from trace telemetry</p>
+    </footer>
+
+  </div>
+
+  <script>
+    function filterRoles() {
+      const input = document.getElementById('roleSearch');
+      const filter = input.value.toLowerCase();
+      const table = document.getElementById('roleTable');
+      const trs = table.getElementsByTagName('tr');
+
+      for (let i = 1; i < trs.length; i++) {
+        const text = trs[i].textContent.toLowerCase();
+        if (text.indexOf(filter) > -1) {
+          trs[i].style.display = '';
+        } else {
+          trs[i].style.display = 'none';
+        }
+      }
+    }
+
+    function highlightTask(card) {
+      document.querySelectorAll('.task-card').forEach(c => c.classList.remove('active'));
+      card.classList.add('active');
+    }
+  </script>
+</body>
+</html>
