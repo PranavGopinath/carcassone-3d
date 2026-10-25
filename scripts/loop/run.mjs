@@ -1049,12 +1049,16 @@ export async function runVisualLoop(options = {}) {
 
     // 3. Startup Check B: Verify all non-null hooks and gameplay click selectors exist on the page.
     //    If any are missing, run a bootstrap patcher iteration and re-check; exit naming what is still missing only if bootstrap fails.
+    console.error(`[loop:${runId}] Checking page hooks and gameplay selectors in ${workDir}...`);
     const hookCheck1 = await checkPageHooksAndSelectors(workDir, config, {
       ...options,
       server: devServer,
     });
 
     if (!hookCheck1.ok) {
+      console.error(
+        `[loop:${runId}] Missing hooks/selectors detected (${hookCheck1.missingHooks.join(', ')} ${hookCheck1.missingSelectors.join(', ')}). Running bootstrap patcher iteration...`
+      );
       const bootstrapDefects = [
         ...hookCheck1.missingHooks.map((h, i) => ({
           id: `bootstrap-hook-${i + 1}`,
@@ -1089,6 +1093,7 @@ export async function runVisualLoop(options = {}) {
         },
       });
 
+      console.error(`[loop:${runId}] Re-checking page hooks and selectors after bootstrap...`);
       const hookCheck2 = await checkPageHooksAndSelectors(workDir, config, {
         ...options,
         server: devServer,
@@ -1103,6 +1108,7 @@ export async function runVisualLoop(options = {}) {
           `Bootstrap patcher failed to resolve missing hooks/selectors: ${stillMissing.join(', ')}`
         );
       }
+      console.error(`[loop:${runId}] Bootstrap succeeded! All hooks and selectors verified.`);
     }
 
     const iterations = [];
@@ -1111,6 +1117,7 @@ export async function runVisualLoop(options = {}) {
     const defectFailureCounts = new Map();
 
     // 4. Iteration 0: Capture and judge the untouched draft (§4.2)
+    console.error(`[loop:${runId}] Iteration 0: Capturing timeline, shots, pageShots, and gameplay...`);
     const iter0Dir = path.join(runDir, 'iter-0');
     const capture0 = options.customCapture
       ? await options.customCapture(workDir, iter0Dir, 0)
@@ -1122,6 +1129,7 @@ export async function runVisualLoop(options = {}) {
     // Run Golden Set if requested or if `runs/loop/golden.json` does not exist yet
     const goldenPath = options.goldenPath || path.join(rootDir, 'runs/loop/golden.json');
     if (options.runGolden || (!fs.existsSync(goldenPath) && !options.skipGolden)) {
+      console.error(`[loop:${runId}] Running real Golden Set vision calibration -> ${goldenPath}...`);
       await runGoldenSet(workDir, config, capture0, {
         ...options,
         rootDir,
@@ -1130,8 +1138,10 @@ export async function runVisualLoop(options = {}) {
         state: spendState,
         budgetUsd,
       });
+      console.error(`[loop:${runId}] Golden Set complete.`);
     }
 
+    console.error(`[loop:${runId}] Iteration 0: Judging motion clips and still shot groups...`);
     const verdicts0 = options.customJudge
       ? await options.customJudge(workDir, iter0Dir, capture0, 0)
       : await judgeIteration(workDir, iter0Dir, capture0, config, {
@@ -1141,6 +1151,9 @@ export async function runVisualLoop(options = {}) {
           state: spendState,
           budgetUsd,
         });
+    console.error(
+      `[loop:${runId}] Iteration 0 Verdicts: ${verdicts0.passedCount}/${verdicts0.totalCount} passed (open defects: ${verdicts0.openDefects.length}, cost: $${spendState.totalCostUsd.toFixed(4)})`
+    );
 
     let bestCommit = execSync('git rev-parse HEAD', { cwd: workDir, encoding: 'utf8' }).trim();
     let bestIteration = 0;
@@ -1218,6 +1231,7 @@ export async function runVisualLoop(options = {}) {
 
       try {
         // Step A: Patcher + Gate
+        console.error(`[loop:${runId}] Iteration ${iterNum}: Running patcher agent on ${bestVerdicts.openDefects.length} open defects...`);
         const patchRes = await runPatcherIteration({
           workDir,
           iterNum,
@@ -1242,6 +1256,7 @@ export async function runVisualLoop(options = {}) {
         pendingEscalationPlan = null;
 
         if (!patchRes.ok || patchRes.rejected) {
+          console.error(`[loop:${runId}] Iteration ${iterNum}: Patch rejected (${patchRes.rejectedReason}). Resetting to ${bestCommit}.`);
           resetToCommit(workDir, bestCommit);
           for (const d of bestVerdicts.openDefects.slice(0, 3)) {
             defectFailureCounts.set(d.id, (defectFailureCounts.get(d.id) || 0) + 1);
@@ -1270,6 +1285,7 @@ export async function runVisualLoop(options = {}) {
         }
 
         // Step B: Capture
+        console.error(`[loop:${runId}] Iteration ${iterNum}: Capturing timeline, shots, pageShots, and gameplay...`);
         const currCapture = options.customCapture
           ? await options.customCapture(workDir, iterDir, iterNum)
           : await captureIteration(workDir, iterDir, config, {
@@ -1278,6 +1294,7 @@ export async function runVisualLoop(options = {}) {
             });
 
         // Step C: Judge
+        console.error(`[loop:${runId}] Iteration ${iterNum}: Judging motion clips and still shot groups...`);
         const currVerdicts = options.customJudge
           ? await options.customJudge(workDir, iterDir, currCapture, iterNum)
           : await judgeIteration(workDir, iterDir, currCapture, config, {
@@ -1289,6 +1306,7 @@ export async function runVisualLoop(options = {}) {
             });
 
         // Step D: Pairwise Comparison against bestCapture
+        console.error(`[loop:${runId}] Iteration ${iterNum}: Running pairwise comparison against Best (Iter ${bestIteration})...`);
         const touchedItemIds = (patchRes.report?.addressed || []).map((a) => a.defectId);
         const pairwiseResult = options.customPairwise
           ? await options.customPairwise(bestCapture, currCapture, iterNum)
@@ -1310,6 +1328,9 @@ export async function runVisualLoop(options = {}) {
 
         // Step E: Compare against best so far
         const cmp = compareIterations(bestVerdicts, currVerdicts, pairwiseResult);
+        console.error(
+          `[loop:${runId}] Iteration ${iterNum} Result: ${currVerdicts.passedCount}/${currVerdicts.totalCount} passed | outcome=${cmp.outcome} (${cmp.reasons.join('; ')}) | cost=$${spendState.totalCostUsd.toFixed(4)}`
+        );
 
         if (cmp.better) {
           bestCommit = patchRes.commitHash;

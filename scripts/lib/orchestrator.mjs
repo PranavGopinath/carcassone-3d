@@ -910,6 +910,11 @@ export async function runToolLoop({
       const toolSpec = toolMap.get(fc.name);
       const handler = toolSpec?.handler || toolHandlers?.[fc.name];
 
+      if (process.env.ORCH_FAKE !== '1') {
+        const argPreview = JSON.stringify(args).slice(0, 140);
+        console.error(`  [tool:${taskId}] #${toolCallsUsed} ${fc.name}(${argPreview})`);
+      }
+
       let rawResult;
       try {
         if (typeof handler === 'function') {
