@@ -15,7 +15,8 @@
     "gameplay": "Scripted play, captured full-page at fps on the play clock. Steps: {at, call, args} invokes a hook; {at, click} is a real Playwright click on a selector. perView scripts run once per view; others once from startView. label is shown to judges as the expected event. expect: JS expression over before/after (step) or start/end (script) getState() snapshots; false is a stepErrors failure. Steps that change neither state nor frame are also stepErrors. Script expect can also use startView and views (getView() at every frame); the demo script allows the last 4s (48 frames) for the final morph and orbit.",
     "outOfScope": "Areas owned by someone else. Judges ignore them; patches that change them are rejected (hard rule 11).",
     "outOfScopePaths": "Files that implement out-of-scope areas. Diffs touching them are rejected.",
-    "baseBranch": "Branch the loop starts from and merges its best iteration back into (locally, never pushed)."
+    "baseBranch": "Branch the loop starts from and merges its best iteration back into (locally, never pushed).",
+    "rateLimits": "Client-side pacing per model, set a little under your API project's quota (check AI Studio for your tier). maxBackoffMs caps one wait; maxWaitMs is how long one call keeps retrying a 429 before the run checkpoints and exits for --resume."
   },
   "name": "tiers",
   "baseBranch": "main",
@@ -79,6 +80,11 @@
   "model": { "name": "gemini-4-argon", "thinking": "high", "mediaResolution": "high" },
   "patcher": { "maxToolCalls": 60, "escalatedMaxToolCalls": 120, "deadlineMs": 1200000 },
   "limits": { "maxIterations": 10, "budgetUsd": 200, "plateauIterations": 2 },
+  "rateLimits": {
+    "gemini-4-argon": { "rpm": 10, "tpm": 1000000, "maxConcurrent": 3 },
+    "maxBackoffMs": 120000,
+    "maxWaitMs": 1800000
+  },
   "views": ["2d", "3d"],
   "gameplay": {
     "fps": 12,
