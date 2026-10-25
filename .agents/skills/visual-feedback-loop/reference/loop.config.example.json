@@ -17,11 +17,7 @@
   "name": "tiers",
   "devCommand": "npm run dev -- --port 5173 --strictPort",
   "url": "http://localhost:5173/?inspect=1&seed=7&w=1280&h=720",
-  "viewport": {
-    "width": 1280,
-    "height": 720,
-    "deviceScaleFactor": 1
-  },
+  "viewport": { "width": 1280, "height": 720, "deviceScaleFactor": 1 },
   "hooks": {
     "global": "__game",
     "ready": null,
@@ -42,40 +38,14 @@
   "timeline": {
     "fps": 12,
     "segments": [
-      {
-        "id": "flat",
-        "start": 0,
-        "end": 3,
-        "focus": "Top-down 2D map: grid alignment, UI overlap"
-      },
-      {
-        "id": "rise",
-        "start": 3,
-        "end": 5,
-        "focus": "2D->3D morph: flicker, pop-in, cracks, jumps"
-      },
-      {
-        "id": "orbit",
-        "start": 5,
-        "end": 9,
-        "focus": "Orbit: slab strata, cliff texture stretch, floating props"
-      },
-      {
-        "id": "macro",
-        "start": 9,
-        "end": 12,
-        "focus": "Waterfall foam, bridge over water, meeple contact"
-      }
+      { "id": "flat",  "start": 0, "end": 3,  "focus": "Top-down 2D map: grid alignment, UI overlap" },
+      { "id": "rise",  "start": 3, "end": 5,  "focus": "2D->3D morph: flicker, pop-in, cracks, jumps" },
+      { "id": "orbit", "start": 5, "end": 9,  "focus": "Orbit: slab strata, cliff texture stretch, floating props" },
+      { "id": "macro", "start": 9, "end": 12, "focus": "Waterfall foam, bridge over water, meeple contact" }
     ],
-    "motionSegments": [
-      "rise"
-    ]
+    "motionSegments": ["rise"]
   },
-  "frameDiff": {
-    "pixelThreshold": 24,
-    "spikeFactor": 4,
-    "grid": 8
-  },
+  "frameDiff": { "pixelThreshold": 24, "spikeFactor": 4, "grid": 8 },
   "shots": [
     "board-2d",
     "terrace-overview",
@@ -86,18 +56,7 @@
     "meeple-ground",
     "underside-slab"
   ],
-  "pageShots": [
-    {
-      "id": "ui-2d",
-      "view": "2d",
-      "t": 1.5
-    },
-    {
-      "id": "ui-3d",
-      "view": "3d",
-      "t": 7
-    }
-  ],
+  "pageShots": [{ "id": "ui-2d", "view": "2d", "t": 1.5 }, { "id": "ui-3d", "view": "3d", "t": 7 }],
   "references": [
     "public/reference/diorama-style-ref.png",
     "public/reference/carcassonne-layout.jpg",
@@ -115,82 +74,27 @@
     "AGENTS.md"
   ],
   "regressionTestDir": "tests/regressions/",
-  "acceptance": [
-    "npm run build",
-    "npm test"
-  ],
-  "model": {
-    "name": "gemini-4-argon",
-    "thinking": "high",
-    "mediaResolution": "high"
-  },
-  "patcher": {
-    "maxToolCalls": 60,
-    "escalatedMaxToolCalls": 120,
-    "deadlineMs": 1200000
-  },
-  "limits": {
-    "maxIterations": 10,
-    "budgetUsd": 25,
-    "plateauIterations": 2
-  },
-  "views": [
-    "2d",
-    "3d"
-  ],
+  "acceptance": ["npm run build", "npm test"],
+  "model": { "name": "gemini-4-argon", "thinking": "high", "mediaResolution": "high" },
+  "patcher": { "maxToolCalls": 60, "escalatedMaxToolCalls": 120, "deadlineMs": 1200000 },
+  "limits": { "maxIterations": 10, "budgetUsd": 25, "plateauIterations": 2 },
+  "views": ["2d", "3d"],
   "gameplay": {
     "fps": 12,
-    "views": [
-      "2d",
-      "3d"
-    ],
+    "views": ["2d", "3d"],
     "scripts": [
       {
         "id": "turns",
         "perView": true,
         "duration": 10,
         "steps": [
-          {
-            "at": 0.0,
-            "call": "loadFixture",
-            "args": [
-              "fixture-midgame"
-            ],
-            "label": "load mid-game board"
-          },
-          {
-            "at": 0.6,
-            "click": "[data-testid=rotate-tile]",
-            "label": "click rotate"
-          },
-          {
-            "at": 1.2,
-            "call": "showLegalMoves",
-            "args": [
-              true
-            ],
-            "label": "show legal placements"
-          },
-          {
-            "at": 2.0,
-            "call": "botMove",
-            "label": "bot places tile + meeple"
-          },
-          {
-            "at": 4.0,
-            "call": "botMove",
-            "label": "bot completes a feature"
-          },
-          {
-            "at": 6.0,
-            "call": "botMove",
-            "label": "bot places tile"
-          },
-          {
-            "at": 8.0,
-            "call": "botMove",
-            "label": "bot completes a feature"
-          }
+          { "at": 0.0, "call": "loadFixture", "args": ["fixture-midgame"], "label": "load mid-game board" },
+          { "at": 0.6, "click": "[data-testid=rotate-tile]", "label": "click rotate" },
+          { "at": 1.2, "call": "showLegalMoves", "args": [true], "label": "show legal placements" },
+          { "at": 2.0, "call": "botMove", "label": "bot places tile + meeple" },
+          { "at": 4.0, "call": "botMove", "label": "bot completes a feature" },
+          { "at": 6.0, "call": "botMove", "label": "bot places tile" },
+          { "at": 8.0, "call": "botMove", "label": "bot completes a feature" }
         ]
       },
       {
@@ -199,16 +103,8 @@
         "startView": "2d",
         "duration": 5.5,
         "steps": [
-          {
-            "at": 0.5,
-            "click": "[data-testid=view-toggle]",
-            "label": "click 2D -> 3D"
-          },
-          {
-            "at": 3.0,
-            "click": "[data-testid=view-toggle]",
-            "label": "click 3D -> 2D"
-          }
+          { "at": 0.5, "click": "[data-testid=view-toggle]", "label": "click 2D -> 3D" },
+          { "at": 3.0, "click": "[data-testid=view-toggle]", "label": "click 3D -> 2D" }
         ]
       }
     ]

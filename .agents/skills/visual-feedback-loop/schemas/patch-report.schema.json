@@ -24,10 +24,7 @@
       "items": {
         "type": "object",
         "required": ["defectId", "reason"],
-        "properties": {
-          "defectId": { "type": "string" },
-          "reason": { "type": "string" }
-        }
+        "properties": { "defectId": { "type": "string" }, "reason": { "type": "string" } }
       }
     }
   }
