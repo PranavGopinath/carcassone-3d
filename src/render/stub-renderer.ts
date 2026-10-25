@@ -1,16 +1,20 @@
 // STUB — owned by Pranav. Flat coloured slabs so the app boots and the UI can
 // develop against something; replaced by the real diorama renderer.
 import * as THREE from 'three';
-import { INSPECTION_SEGMENTS } from '../contracts/renderer';
+import { segmentAt } from '../contracts/renderer';
 import type { ClockMode, FrameManifest, Renderer, View } from '../contracts/renderer';
-import { LEVEL_HEIGHT, TILE_SIZE, rotatedHeights, rotatedSides, toWorld } from '../contracts/tiles';
+import { DIR_OFFSETS, LEVEL_HEIGHT, TILE_SIZE, rotatedSides, toWorld } from '../contracts/tiles';
 import type { GameState, Side } from '../contracts/types';
 
-const EDGE_COLORS: Record<Side, number> = {
-  GRASS: 0x5f9e6e,
-  CITY: 0x6b7f99,
-  ROAD: 0xc9b48a,
-  WATER: 0x2f7fb8,
+// Shared across all tiles, so sync() allocates no GPU resources.
+const BASE_GEOMETRY = new THREE.BoxGeometry(TILE_SIZE * 0.96, LEVEL_HEIGHT, TILE_SIZE * 0.96);
+const BASE_MATERIAL = new THREE.MeshStandardMaterial({ color: 0xe8dcc4 });
+const STRIP_GEOMETRY = new THREE.BoxGeometry(TILE_SIZE * 0.3, 0.02, TILE_SIZE * 0.3);
+const SIDE_MATERIALS: Record<Side, THREE.Material> = {
+  GRASS: new THREE.MeshStandardMaterial({ color: 0x5f9e6e }),
+  CITY: new THREE.MeshStandardMaterial({ color: 0x6b7f99 }),
+  ROAD: new THREE.MeshStandardMaterial({ color: 0xc9b48a }),
+  WATER: new THREE.MeshStandardMaterial({ color: 0x2f7fb8 }),
 };
 
 export class StubRenderer implements Renderer {
@@ -22,48 +26,42 @@ export class StubRenderer implements Renderer {
   private clock: ClockMode = 'realtime';
   private lastT = 0;
   private raf = 0;
+  private onResize = () => {};
 
   mount(canvas: HTMLCanvasElement): void {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
-    this.renderer.setPixelRatio(window.devicePixelRatio);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.scene.background = new THREE.Color(0xf6f1e7);
     this.scene.add(new THREE.HemisphereLight(0xffffff, 0x88aacc, 1.2));
     const sun = new THREE.DirectionalLight(0xffffff, 1.5);
     sun.position.set(5, 10, 3);
     this.scene.add(sun, this.board);
     this.applyView();
-    const onResize = () => {
+    this.onResize = () => {
       const { clientWidth: w, clientHeight: h } = canvas;
       this.renderer.setSize(w, h, false);
       this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
     };
-    window.addEventListener('resize', onResize);
-    onResize();
+    window.addEventListener('resize', this.onResize);
+    this.onResize();
     this.setClockMode('realtime');
   }
 
   sync(state: GameState): void {
     this.board.clear();
-    const s = TILE_SIZE;
+    const off = TILE_SIZE * 0.3;
     for (const p of state.placements) {
       const tile = new THREE.Group();
       const w = toWorld(p.x, p.y, p.level);
       tile.position.set(w.x, w.y, w.z);
-      const base = new THREE.Mesh(
-        new THREE.BoxGeometry(s * 0.96, LEVEL_HEIGHT, s * 0.96),
-        new THREE.MeshStandardMaterial({ color: 0xe8dcc4 }),
-      );
+      const base = new THREE.Mesh(BASE_GEOMETRY, BASE_MATERIAL);
       base.position.y = -LEVEL_HEIGHT / 2;
       tile.add(base);
-      const heights = rotatedHeights(p.tileId, p.rotation);
       rotatedSides(p.tileId, p.rotation).forEach((side, d) => {
-        const strip = new THREE.Mesh(
-          new THREE.BoxGeometry(s * 0.3, 0.02 + Math.max(0, heights[d]) * LEVEL_HEIGHT * 0.2, s * 0.3),
-          new THREE.MeshStandardMaterial({ color: EDGE_COLORS[side] }),
-        );
-        const off = s * 0.3;
-        strip.position.set([0, off, 0, -off][d], 0.01, [-off, 0, off, 0][d]);
+        const strip = new THREE.Mesh(STRIP_GEOMETRY, SIDE_MATERIALS[side]);
+        const { dx, dy } = DIR_OFFSETS[d as 0 | 1 | 2 | 3];
+        strip.position.set(dx * off, 0.01, dy * off);
         tile.add(strip);
       });
       tile.userData = { tileId: p.tileId };
@@ -99,13 +97,10 @@ export class StubRenderer implements Renderer {
   }
 
   getManifest(): FrameManifest {
-    const seg = this.clock === 'manual'
-      ? INSPECTION_SEGMENTS.find((s) => this.lastT >= s.startMs && this.lastT < s.endMs)?.id ?? null
-      : null;
     return {
       tMs: this.lastT,
       view: this.view,
-      segment: seg,
+      segment: this.clock === 'manual' ? segmentAt(this.lastT) : null,
       camera: {
         position: this.camera.position.toArray() as [number, number, number],
         target: [0, 0, 0],
@@ -122,8 +117,13 @@ export class StubRenderer implements Renderer {
     };
   }
 
+  async startInspectionFlight(): Promise<void> {
+    throw new Error('startInspectionFlight: not implemented'); // TODO(render/inspector)
+  }
+
   dispose(): void {
     cancelAnimationFrame(this.raf);
+    window.removeEventListener('resize', this.onResize);
     this.renderer.dispose();
   }
 
