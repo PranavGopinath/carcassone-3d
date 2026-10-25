@@ -1,215 +1,115 @@
 ---
 name: visual-feedback-loop
 description: >-
-  Build and run a project-agnostic visual feedback loop (Prompt 2): render a 3D/WebGL app
-  deterministically, record a fly-through and named stills, have Gemini judges grade it against a
-  rubric and reference images, auto-patch the renderer, keep the best iteration, and hand off to a
-  human at a gate. Each project plugs in through a single `loop.config.json`.
+  Build and run a project-agnostic visual feedback loop (Prompt 2): render a WebGL app
+  deterministically, capture frames and shots, have Gemini judges grade a pass/fail rubric
+  backed by hard measurements, patch the renderer, keep the best iteration, and stop at a
+  human gate. Each project plugs in through `loop.config.json`.
 ---
 
-# Visual Feedback Loop Skill (Prompt 2)
+# Visual Feedback Loop (Prompt 2)
 
-A single pass gives you a first draft. This skill builds the system that **renders what the app made, watches it, critiques it against the goal, and fixes it in a loop**. Nothing in it is game-specific. A project plugs in by providing deterministic render hooks and a `loop.config.json`. Tiers is the first project to use it.
+Prerequisites: Prompt 0 is done. Every model call goes through `callModel` in `scripts/lib/orchestrator.mjs` (trace, budget caps, `ORCH_FAKE=1`). The target app passes its own build gates.
+Timebox: 2 hours, about 500 lines of code. Don't gold-plate.
 
-**Prerequisites:** Prompt 0 (`subagent-orchestrator`) is done. Every model call goes through `callModel` in `scripts/lib/orchestrator.mjs`, so trace logging, budget caps and `ORCH_FAKE=1` apply here too. The target app passes its own build gates.
+## Hard rules
 
-**Timebox:** 90–120 minutes, about 700 lines. If something isn't working at the timebox, ship the simpler fallback noted in that section. Don't gold-plate.
+1. **Patch only `patchAllowlist`.** Never write to `tests/`, `rubric/`, `scripts/gates/`, `loop.config.json`, or this skill.
+2. **Never record in real time.** Freeze the app's clock, render each frame by time, and screenshot it. Video is stitched from those frames.
+3. **Measurements beat opinions.** A failing hard check (`audit:*`, `frameDiff`, `blankFrame`) fails its rubric item whatever a judge says.
+4. **The rubric is the goal.** Stop when every item passes. `aestheticScore` is shown on the dashboard and nothing else.
+5. **`GEMINI_API_KEY` is read only by Node** (`node --env-file=.env`). Never use a `VITE_` prefix and never log it.
+6. **High effort everywhere.** Every judge, pairwise and patcher call uses `gemini-4-argon` with `thinking: "high"`, and media at `media_resolution` high. Pass both explicitly on each `callModel` call rather than relying on role defaults. Don't downgrade either to save budget; cut iterations instead.
 
----
+## Files
 
-## 1. Principles
+- Project adapter: `loop.config.json` at repo root. Example and field notes: [reference/loop.config.example.json](reference/loop.config.example.json).
+- Rubric: `rubric/visual.json`. Example: [reference/rubric.example.json](reference/rubric.example.json).
+- Model output schemas, passed to `callModel`: [schemas/judge.schema.json](schemas/judge.schema.json), [schemas/patch.schema.json](schemas/patch.schema.json).
+- Code: `scripts/loop/{capture,judge,patch,run}.mjs`. Output: `runs/loop/<runId>/iter-<N>/` and `runs/loop/<runId>/dashboard.html`.
 
-1. **Determinism first.** Never record wall-clock playback. Freeze the app's clock, render exact frames by time, screenshot each one, and stitch them with ffmpeg. The same commit must produce the same frames, otherwise you can't compare iterations.
-2. **Hard facts beat opinions.** If the app can measure something (floating props, ungrounded meeples, stretched UVs, console errors), measure it and give the judges the numbers. A failed hard check fails its rubric item whatever the judges say.
-3. **The rubric is the goal; the score is decoration.** The loop stops when every rubric item passes. The 0–100 aesthetic score only goes on the dashboard.
-4. **Compare, don't just grade.** Absolute LLM scores drift between calls. Every iteration also gets a side-by-side "previous best vs. current" judgement.
-5. **Keep the best version.** Every iteration is a git commit. If an iteration is worse than the best so far, revert to the best one.
-6. **The patcher stays in its lane.** It may only edit paths in `patchAllowlist`. It never touches tests, the rubric, the gates or config.
+On startup, check that every non-null hook in the config exists on the page. If any are missing, exit with one error naming them all.
 
----
+## 1. Capture: `capture.mjs`
 
-## 2. Project Adapter: `loop.config.json`
+1. Start `devCommand` once per run. Load the page fresh for every iteration. **No HMR**: stale WebGL state gives wrong frames.
+2. Use Playwright Chromium with the configured viewport and `deviceScaleFactor`, and GPU flags (macOS: `--use-angle=metal`). Read the renderer string via `WEBGL_debug_renderer_info`. **Fail** if it is SwiftShader or another software renderer, because frames would look plausible but be wrong.
+3. Before frame 0, wait for fonts (`document.fonts.ready`) and textures (the `ready` hook if present). Check that the app's `inspect` mode drives `performance.now`, `Date`, `requestAnimationFrame` and `Math.random` from `t` and the seed. If shaders, particles or water animate by wall clock, report it as a determinism defect.
+4. For each `t` at `timeline.fps` (10–15 is enough), call `renderAt(t)` and take a `page.screenshot` clipped to the canvas. Don't use `toDataURL`: it needs `preserveDrawingBuffer`.
+5. Take the configured shots and the tile sheet, and save `audit()` output plus page console errors to `audit.json`.
+6. **Hard checks:**
+   - `blankFrame`: any frame that is nearly a single color.
+   - `frameDiff`: for each consecutive pair, the fraction of pixels whose change exceeds a threshold. Flag a spike when it exceeds `spikeFactor` × the segment median. Ignore the frames on either side of a segment boundary, since camera cuts are expected there. Mean-difference alone misses small flicker such as z-fighting.
+7. Stitch frames with ffmpeg (`@ffmpeg-installer/ffmpeg` if there is no system ffmpeg). If stitching fails, continue with stills only.
+8. Two captures of the same commit must match within a small per-pixel tolerance, not byte for byte, because GPUs aren't bit-exact.
 
-Lives at the repo root. The loop reads it and nothing else project-specific.
+## 2. Judges: `judge.mjs`
 
-```json
-{
-  "name": "tiers",
-  "devCommand": "npm run dev -- --port 5173 --strictPort",
-  "url": "http://localhost:5173/?inspect=1&seed=7&w=1280&h=720",
-  "viewport": { "width": 1280, "height": 720, "deviceScaleFactor": 1 },
-  "hooks": {
-    "global": "__game",
-    "ready": null,
-    "loadFixture": "loadFixture",
-    "renderAt": "renderAt",
-    "timeUnit": "s",
-    "listShots": "listShots",
-    "captureShot": "captureShot",
-    "audit": "audit",
-    "tileSheet": "getTileSheet"
-  },
-  "fixture": "fixture-all-features",
-  "timeline": {
-    "fps": 30,
-    "segments": [
-      { "id": "flat",  "start": 0, "end": 3,  "focus": "Top-down 2D card: grid alignment, UI overlap" },
-      { "id": "rise",  "start": 3, "end": 5,  "focus": "2D->3D morph: flicker, pop-in, cracks, jumps", "denseStills": 6 },
-      { "id": "orbit", "start": 5, "end": 9,  "focus": "360 orbit: strata edges, cliff texture stretch, floating props" },
-      { "id": "macro", "start": 9, "end": 12, "focus": "Waterfall foam/spray, bridge over water, meeple contact" }
-    ]
-  },
-  "shots": ["board-2d", "terrace-overview", "waterfall-macro", "bridge-hill-macro",
-            "cliff-closeup", "city-closeup", "meeple-ground", "underside-slab"],
-  "references": ["reference/pic162877.jpg", "reference/carcassonne-layout.jpg", "docs/DESIGN.md"],
-  "rubric": "rubric/visual.json",
-  "patchAllowlist": ["src/render/", "src/tiles/"],
-  "acceptance": ["npm run build", "npm test"],
-  "limits": { "maxIterations": 4, "budgetUsd": 5, "maxPatchesPerIteration": 3 }
-}
-```
+Both judges use `gemini-4-argon` and the `judge_a`/`judge_b` roles. They can't write files. **Put text instructions after the media**, and write timestamps as `MM:SS`.
 
-- A hook set to `null` is optional. `ready` falls back to waiting until `window[global]` exists and one `renderAt(0)` has been called.
-- `timeUnit` is `"s"` or `"ms"`, so apps that render by milliseconds also work.
-- On startup, check that every non-null hook exists. If any are missing, exit with a single error that lists them. Never guess at a hook.
+- **judge_a (motion):** upload `flight.webm` via the Files API and poll until `ACTIVE`. Use **static** processing (not agentic, which suits long videos and has no custom fps). Clip to the motion segment with `start_offset`/`end_offset`, set `fps` near the capture rate, and set `media_resolution` high. Send a second part: a labelled filmstrip of the frames around each `frameDiff` spike. Grade motion items only.
+- **judge_b (stills):** one call per segment or shot group. Send the relevant shot plus a high-resolution crop for each small-object item. Turn audit findings into **numbered marks drawn on the image** ("mark 3: is this rock touching the ground?"), not raw JSON, because judges over-trust text. Include reference images only for style items.
+- **Pairwise:** a separate call comparing the previous best with the current version per item. Randomize which one is labelled A or B, ask in **both orders**, and count a winner only if it wins both times. Otherwise it's a tie.
+- **Merging verdicts:**
+  - A fail must cite a `t` or shot, plus a mark or region.
+  - If the judges disagree, the item is `uncertain`: re-ask once on a tighter crop and take the majority of three.
+  - Both judges are the same model family, so their agreement corroborates a verdict but doesn't validate it.
+- **Golden set:** before the first live run, inject known defects (a floating prop, a blank frame in the morph, a hovering meeple, a frame of flicker) and run the judges on them. Record recall and false positives in `runs/loop/golden.json`. A judge may fail an item without a hard check only for defect types it caught in the golden set. These results are also good demo material.
 
-## 3. Rubric: `rubric/visual.json` (protected path)
+## 3. Patcher: `patch.mjs`
 
-The rubric is a list of pass/fail items. Each item names where its evidence comes from (`judge`, `audit`, or both) and which segment or shot to look at. Tiers starter rubric:
+1. **Start a fresh conversation each iteration.** The context holds only:
+   - the current contents of the files in the allowlist relevant to the open defects
+   - open defects with their measurements
+   - steering notes
+   - `triedLedger`: the last 6 failed attempts, one line each (`defectId, file, ≤25-word change, outcome`)
 
-```json
-{
-  "items": [
-    { "id": "F1", "segment": "flat",  "text": "Board reads as a flat 2D map: no perspective skew, tiles edge-to-edge with no gaps", "source": "judge" },
-    { "id": "F2", "segment": "flat",  "text": "UI panels do not cover the board", "source": "judge" },
-    { "id": "R1", "segment": "rise",  "text": "No frame where geometry vanishes or flickers", "source": ["judge", "frameDiff"] },
-    { "id": "R2", "segment": "rise",  "text": "Props rise with the terrain; nothing pops in at once", "source": ["judge", "frameDiff"] },
-    { "id": "R3", "segment": "rise",  "text": "No cracks open between tiles during the morph", "source": "judge" },
-    { "id": "O1", "segment": "orbit", "shot": "underside-slab", "text": "Layered soil/stone slab edge visible under the board", "source": "judge" },
-    { "id": "O2", "segment": "orbit", "shot": "cliff-closeup", "text": "Cliff textures are not stretched", "source": ["judge", "audit:uvStretch"] },
-    { "id": "O3", "segment": "orbit", "text": "No floating trees, rocks or props", "source": ["judge", "audit:floatingProps"] },
-    { "id": "O4", "segment": "orbit", "text": "Water surfaces meet at shared tile edges", "source": ["judge", "audit:waterHeights"] },
-    { "id": "M1", "segment": "macro", "shot": "waterfall-macro", "text": "Foam at waterfall crest and base; water flows downhill", "source": "judge" },
-    { "id": "M2", "segment": "macro", "shot": "bridge-hill-macro", "text": "Bridge arch spans the river with water visibly flowing under it", "source": "judge" },
-    { "id": "M3", "segment": "macro", "shot": "meeple-ground", "text": "Meeples sit on their features, not floating", "source": ["judge", "audit:meeplesGrounded"] },
-    { "id": "T1", "shot": "tileSheet", "text": "Every tile feature meets its edge midpoint; style matches the references", "source": "judge" }
-  ]
-}
-```
+   Leave out old diffs, images and judge prose. Use `previousInteractionId` only for retries within one iteration.
+2. The patcher returns patches per `schemas/patch.schema.json`: at most `maxPatchesPerIteration`, **one defect per patch**, highest severity first.
+3. **Validate before writing:**
+   - The path is inside the allowlist after normalization, with no `..`.
+   - `search` includes at least 3 lines of context and occurs **exactly once**. On 0 or 2+ matches, return the reason and the line numbers of each match, and retry once.
+   - The file still parses after the edit.
+4. Run `acceptance`. On failure, retry once with the log. If it fails again, drop that patch, add it to `triedLedger`, and keep the others.
+5. Commit as `loop iter <N>: <defectIds> <rationale>`.
 
-An item passes only if every source in its list passes.
-
----
-
-## 4. Capture: `scripts/loop/capture.mjs`
-
-`capture({ config, outDir })` writes:
+## 4. Loop: `run.mjs`
 
 ```
-runs/loop/<runId>/iter-<N>/
-  frames/000000.png …        every frame of the timeline at timeline.fps
-  flight.webm                frames stitched with ffmpeg (VP9, CRF 30)
-  stills/<segment>-<t>.png   3 evenly spaced stills per segment, plus `denseStills` for the rise
-  shots/<name>.png           each configured shot
-  tilesheet.png              when the tileSheet hook exists
-  audit.json                 hooks.audit() output, plus console errors and warnings from the page
-  framediff.json             frame-to-frame pixel-difference spikes
+node --env-file=.env scripts/loop/run.mjs [--max-iterations 4] [--budget-usd 5] [--notes "..."]
 ```
 
-Steps:
-1. Start `devCommand` once per run and wait for the port. Load the page fresh for every iteration. **Do not rely on HMR**, because stale WebGL state gives misleading frames.
-2. Launch Playwright Chromium with the configured viewport and `deviceScaleFactor`. Use GPU-backed WebGL where the OS supports it (on macOS: `--use-angle=metal`). Software rendering is a fallback, and the run should log a warning when it falls back.
-3. Load the fixture, then for `t` from `0` to the timeline end in steps of `1/fps`, call `renderAt(t)` and screenshot the canvas.
-4. **Frame diff:** compute the mean absolute pixel difference between consecutive frames (`pngjs`). Record any frame whose difference is more than 4× the segment's median as a spike, with its timestamp. Spikes count as hard evidence for the `frameDiff` source, and the spike frames are added to the judges' stills.
-5. Stitch the frames with ffmpeg. If ffmpeg is missing, use `@ffmpeg-installer/ffmpeg`. If that also fails, skip the video and send only stills; the loop still works without it.
-6. Always close the browser in a `finally` block.
+1. Work in worktree `wt/loop-<runId>` on branch `loop/<runId>`, starting from `integration`, using the orchestrator's worktree helpers.
+2. Iteration 0 captures and judges the untouched draft.
+3. Each later iteration runs patch → acceptance → capture → judge, then compares against the best so far:
+   - **Better** (new best): strictly more rubric items pass, or the same number with more pairwise wins than losses. Any newly failing hard check makes it worse.
+   - **Tie or worse:** run `git reset --hard <bestCommit>` and add the patches' defects to `triedLedger`. If the same defect has failed twice, tell the patcher to try a structurally different fix.
+4. **Stop** on any of: every item passes, `maxIterations` reached, budget spent, or 2 iterations in a row with no improvement (a revert counts as no improvement).
+5. **Human gate:** print the per-iteration rubric counts, the best iteration and the cost, then offer:
+   - `[1] Continue`
+   - `[2] Steer` (notes go into the next judge and patcher prompts)
+   - `[3] Approve` (merge the best iteration into `integration` with `--no-ff`)
 
-## 5. Judges: `scripts/loop/judge.mjs`
+## 5. Dashboard
 
-Two independent judges, using the `judge_a` and `judge_b` roles from Prompt 0. Neither can write files.
+A static `dashboard.html`, regenerated after every iteration. It needs only:
+- a rubric grid (items × iterations, pass/fail)
+- iteration 0 next to the best iteration (stills, plus video if available)
+- each iteration's defects with timestamps, patch diff, commit hash and cost
 
-- **judge_a (motion):** gets `flight.webm` uploaded with `ai.files.upload` (poll until the file is `ACTIVE`), the segment list, and the frame-diff spikes. It grades the motion items (`R*`) and anything that needs a sense of timing. Request a higher video sampling rate if the API supports it. The dense rise stills cover it either way, because a 1.4 s morph sampled at 1 fps is close to invisible.
-- **judge_b (stills):** gets the stills, the shots, the tile sheet, the reference images, `audit.json`, and **the previous best iteration's stills, side by side**. It grades the static items and answers which version is better (prev or current) for each item.
+## 6. Tests: `tests/loop.test.ts` (`ORCH_FAKE=1`, offline)
 
-Both judges return strict JSON (pass a schema to `callModel`):
+Use a fake scene, `tests/fixtures/loop-scene.html`: a cube with the hooks.
+1. A missing hook fails fast and names the hook.
+2. The patcher rejects paths outside the allowlist, protected paths, and search blocks matching 0 or 2+ times.
+3. A cube injected to pop in at a known frame trips `frameDiff`.
+4. A worse or tied iteration resets to the best commit, and 2 non-improving iterations stop the loop.
 
-```json
-{
-  "aestheticScore": 0,
-  "summary": "",
-  "items": [{ "id": "M3", "pass": false, "evidence": "meeple at 10.4s hovers ~2px above road", "t": 10.4, "shot": "meeple-ground" }],
-  "defects": [{ "id": "D1", "itemIds": ["M3"], "severity": "high", "t": 10.4, "description": "", "suspectedArea": "meeple placement height" }],
-  "pairwise": [{ "id": "M3", "better": "current" }]
-}
-```
+## Definition of done
 
-Merge the two verdicts. A hard check (`audit:*`, `frameDiff`) overrides both judges. If the judges disagree on an item, it counts as failed, and both pieces of evidence go to the patcher.
-
-## 6. Patcher: `scripts/loop/patch.mjs`
-
-1. **Route:** the `router` role maps each defect to 1–3 candidate files inside `patchAllowlist`, using the file list and `suspectedArea`. Send the patcher those files' full contents, nothing more.
-2. **Patch:** the `patcher` role returns `{ patches: [{ path, search, replace }], rationale }`, with at most `maxPatchesPerIteration` patches, fixing high-severity defects first.
-3. **Validate before writing:** the path must be in `patchAllowlist` (normalized, no `..`). `search` must occur **exactly once** in the file. Anything else is rejected and sent back to the patcher once, with the reason, via `previousInteractionId`.
-4. **Apply, then run `acceptance`.** On failure, send the log back to the patcher once. If it fails again, drop that patch and keep the rest.
-5. Commit as `loop iter <N>: <rationale>`.
-
-If the orchestrator requires static ownership, set the `patcher` role's `ownsPaths` to `patchAllowlist`. Protected paths (`tests/`, `rubric/`, `scripts/gates/`, `loop.config.json`) are never writable.
-
-## 7. Loop Driver: `scripts/loop/run.mjs`
-
-```
-node --env-file=.env scripts/loop/run.mjs [--max-iterations 4] [--budget-usd 5] [--notes "..."] [--resume <runId>]
-```
-
-1. Create a worktree `wt/loop-<runId>` on branch `loop/<runId>`, starting from `integration`.
-2. **Iteration 0** is the untouched first draft: capture and judge only, no patch.
-3. Each iteration after that: patch → acceptance → capture → judge → decide:
-   - **Better or equal:** more rubric items pass, or the same number with pairwise wins ≥ losses. This becomes the new best.
-   - **Worse:** run `git reset --hard <bestCommit>` on the loop branch, record the regression, and pass the failed patch's rationale to the next patcher call as "already tried".
-4. **Stop** when all rubric items pass, `maxIterations` is reached, the budget runs out, or two iterations in a row fail to improve. Then go to the gate.
-5. Steering notes from `--notes` or the gate go into every judge and patcher prompt for the next round.
-6. Write `runs/loop/<runId>/ledger.json` after every step, so `--resume` can continue from it.
-
-`GEMINI_API_KEY` is read only by Node scripts. Never expose it to the browser bundle (no `VITE_` prefix).
-
-## 8. Human Gate
-
-When the loop stops, print a table: iterations, rubric items passed per iteration, the best iteration, and cost so far. Then prompt with `readline`:
-
-```
-[1] Continue    run N more iterations toward the rubric
-[2] Steer       type notes (e.g. "cliffs too dark, soften the sun") -> continue with notes
-[3] Revert      check out iteration K as the new best
-[4] Approve     merge the best iteration into integration (--no-ff) and exit
-[5] Abort       leave integration untouched and exit
-```
-
-## 9. Dashboard: `runs/loop/<runId>/dashboard.html`
-
-A self-contained static page, regenerated after every iteration. This is the demo's centerpiece.
-
-- **Top:** iteration 0 and the best iteration side by side (video, plus a before/after slider on one key shot).
-- **Rubric grid:** one row per rubric item, one column per iteration, each cell pass or fail. Hovering a cell shows the evidence.
-- **Per iteration:** the video, with the defect list under it; clicking a defect's timestamp jumps the video there. Also the stills, the shots, the audit numbers, the patch diff (inline, with the commit hash), and the cost.
-- **Timeline of human gate decisions** and steering notes.
-
-## 10. Offline Tests: `tests/loop.test.ts` (`ORCH_FAKE=1`)
-
-Run against a tiny fixture page (`tests/fixtures/loop-scene.html`: a spinning cube with fake hooks), so the tests need neither the real app nor the network:
-- `capture` produces the right frame count. Two captures of the same commit produce byte-identical frames.
-- Frame diff flags a cube that's injected to pop in at a known frame.
-- A missing hook fails fast with the hook's name in the error.
-- The patcher rejects paths outside the allowlist, search blocks that match 0 or 2+ times, and protected paths.
-- A worse iteration is reverted to the best commit. Two non-improving iterations stop the loop.
-- A hard check failing overrides a judge's pass.
-- The dashboard renders from a ledger without network access.
-
----
-
-## 11. Definition of Done (Prompt 2)
-
-1. `ORCH_FAKE=1 npm test` passes the loop tests offline.
-2. A live run on Tiers completes iteration 0 plus at least 2 patched iterations, and its `dashboard.html` shows the rubric moving.
-3. Every model call appears in `runs/orchestrator/trace.jsonl` with its cost, and the run stays within `budgetUsd`.
-4. Approving at the gate merges the best iteration into `integration`. Aborting leaves `integration` untouched.
-5. Append lessons learned to `AGENTS.md`, commit, and stop.
+1. The offline tests pass.
+2. The golden set has run and `golden.json` exists.
+3. A live run on the target completes iteration 0 plus at least 2 patched iterations, and its dashboard shows the rubric changing.
+4. Every call appears in `runs/orchestrator/trace.jsonl` within `budgetUsd`.
+5. Approve merges the best iteration into `integration`.
+6. Append lessons learned to `AGENTS.md`, commit, and stop.

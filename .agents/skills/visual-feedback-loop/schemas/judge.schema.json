@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "JudgeVerdict",
+  "type": "object",
+  "required": ["items", "defects"],
+  "properties": {
+    "aestheticScore": { "type": "number", "minimum": 0, "maximum": 100 },
+    "summary": { "type": "string" },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "verdict", "evidence"],
+        "properties": {
+          "id": { "type": "string" },
+          "verdict": { "enum": ["pass", "fail", "uncertain"] },
+          "evidence": { "type": "string" },
+          "t": { "type": "string", "description": "MM:SS" },
+          "shot": { "type": "string" },
+          "markId": { "type": "integer" }
+        }
+      }
+    },
+    "defects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "itemIds", "severity", "description"],
+        "properties": {
+          "id": { "type": "string" },
+          "itemIds": { "type": "array", "items": { "type": "string" } },
+          "severity": { "enum": ["high", "medium", "low"] },
+          "t": { "type": "string", "description": "MM:SS" },
+          "shot": { "type": "string" },
+          "markId": { "type": "integer" },
+          "description": { "type": "string" },
+          "suspectedArea": { "type": "string" }
+        }
+      }
+    }
+  }
+}
