@@ -1,0 +1,23 @@
+{
+  "placements": [
+    { "tileId": "START",         "x": 0,  "y": 0,  "rotation": 0, "level": 0, "meeple": { "player": 0, "featureId": "river" } },
+    { "tileId": "RIVER_SPRING",  "x": -1, "y": 0,  "rotation": 1, "level": 0 },
+    { "tileId": "BRIDGE_1",      "x": 1,  "y": 0,  "rotation": 0, "level": 0 },
+    { "tileId": "WATERFALL_1",   "x": 2,  "y": 0,  "rotation": 3, "level": 0 },
+    { "tileId": "RIVER_LAKE",    "x": 3,  "y": 0,  "rotation": 1, "level": -1 },
+    { "tileId": "ROAD_1",        "x": 1,  "y": -1, "rotation": 0, "level": 0, "meeple": { "player": 1, "featureId": "road" } },
+    { "tileId": "CITY_1",        "x": 1,  "y": -2, "rotation": 1, "level": 0, "meeple": { "player": 0, "featureId": "city" } },
+    { "tileId": "CITY_ROAD_END", "x": 2,  "y": -2, "rotation": 3, "level": 0 },
+    { "tileId": "ROAD_2",        "x": 1,  "y": 1,  "rotation": 1, "level": 0 },
+    { "tileId": "CITY_ROAD_1",   "x": 1,  "y": 2,  "rotation": 2, "level": 0 }
+  ],
+  "players": [
+    { "id": 0, "name": "Player 1", "color": "#1f4e8c", "score": 0, "meeplesLeft": 1 },
+    { "id": 1, "name": "Player 2", "color": "#c8693a", "score": 0, "meeplesLeft": 2 }
+  ],
+  "current": 0,
+  "turn": 10,
+  "deckIndex": 20,
+  "phase": "over",
+  "log": []
+}
