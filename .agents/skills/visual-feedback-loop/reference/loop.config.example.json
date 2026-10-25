@@ -14,7 +14,7 @@
     "views": "Every view the game has. Each iteration captures and judges all of them (hard rule 9).",
     "gameplay": "Scripted play, captured full-page at fps on the play clock. Steps: {at, call, args} invokes a hook; {at, click} is a real Playwright click on a selector. perView scripts run once per view; others once from startView. label is shown to judges as the expected event.",
     "outOfScope": "Areas owned by someone else. Judges ignore them; patches that change them are rejected (hard rule 11).",
-    "outOfScopePaths": "Files that implement out-of-scope areas (e.g. the background module). Fill in once known; diffs touching them are rejected."
+    "outOfScopePaths": "Files that implement out-of-scope areas (e.g. the HUD styles). Fill in once known; diffs touching them are rejected."
   },
   "name": "tiers",
   "devCommand": "npm run dev -- --port 5173 --strictPort",
@@ -107,9 +107,6 @@
       }
     ]
   },
-  "outOfScope": [
-    "Page and scene background, sky and clouds behind the board",
-    "HUD layout and styling (panels, buttons, typography)"
-  ],
+  "outOfScope": ["HUD layout and styling (panels, buttons, typography)"],
   "outOfScopePaths": []
 }
