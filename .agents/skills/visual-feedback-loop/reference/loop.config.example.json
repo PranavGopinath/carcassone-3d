@@ -8,7 +8,7 @@
     "references": "Every image any rubric item may cite. Startup fails if one is missing.",
     "protectedPaths": "The patcher may edit anything else in the worktree, except baseline tests (files under tests/ tracked at the run's start commit).",
     "regressionTestDir": "Where the patcher adds new tests. These run in acceptance but never count as passing a rubric item.",
-    "patcher": "Tool-call and wall-clock caps per iteration; escalatedMaxToolCalls applies to the iteration after a lead_architect escalation.",
+    "patcher": "Tool-call and wall-clock caps per iteration; escalatedMaxToolCalls applies to the iteration after a lead_architect escalation. maxReadLines and maxLogLines cap what one tool call returns, keeping each turn small.",
     "limits": "plateauIterations: non-improving iterations in a row before escalating to lead_architect. budgetUsd is a safety net set well above a full run's cost; maxIterations normally ends the run.",
     "timeline.motionSegments": "Cinematic segments sent to judge_a as clipped videos. Gameplay videos are always sent too.",
     "views": "Every view the game has. Each iteration captures and judges all of them (hard rule 9).",
@@ -16,7 +16,8 @@
     "outOfScope": "Areas owned by someone else. Judges ignore them; patches that change them are rejected (hard rule 11).",
     "outOfScopePaths": "Files that implement out-of-scope areas. Diffs touching them are rejected.",
     "baseBranch": "Branch the loop starts from and merges its best iteration back into (locally, never pushed).",
-    "rateLimits": "Client-side pacing per model, set a little under your API project's quota (check AI Studio for your tier). maxBackoffMs caps one wait; maxWaitMs is how long one call keeps retrying a 429 before the run checkpoints and exits for --resume."
+    "rateLimits": "Client-side pacing per model, set a little under your API project's quota (check AI Studio for your tier). maxBackoffMs caps one wait; maxWaitMs is how long one call keeps retrying a 429 before the run checkpoints and exits for --resume. On a long outage the run pauses and probes every probeIntervalMs, giving up only after maxPauseMs.",
+    "judging": "videoFps: frame rate of videos sent to judge_a; full-rate filmstrips are added around frameDiff spikes and gameplay steps."
   },
   "name": "tiers",
   "baseBranch": "main",
@@ -78,13 +79,22 @@
   "regressionTestDir": "tests/regressions/",
   "acceptance": ["npm run build", "npm test"],
   "model": { "name": "gemini-4-argon", "thinking": "high", "mediaResolution": "high" },
-  "patcher": { "maxToolCalls": 60, "escalatedMaxToolCalls": 120, "deadlineMs": 1200000 },
+  "patcher": {
+    "maxToolCalls": 60,
+    "escalatedMaxToolCalls": 120,
+    "deadlineMs": 1200000,
+    "maxReadLines": 300,
+    "maxLogLines": 80
+  },
   "limits": { "maxIterations": 10, "budgetUsd": 200, "plateauIterations": 2 },
   "rateLimits": {
     "gemini-4-argon": { "rpm": 10, "tpm": 1000000, "maxConcurrent": 3 },
     "maxBackoffMs": 120000,
-    "maxWaitMs": 1800000
+    "maxWaitMs": 1800000,
+    "probeIntervalMs": 600000,
+    "maxPauseMs": 86400000
   },
+  "judging": { "videoFps": 6 },
   "views": ["2d", "3d"],
   "gameplay": {
     "fps": 12,
