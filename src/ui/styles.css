@@ -550,3 +550,14 @@
   font-size: 14px;
   font-weight: 600;
 }
+
+.ui-modal-view-btn {
+  margin-top: 10px;
+  background: none;
+  border: none;
+  color: #4b5563;
+  font: inherit;
+  font-size: 14px;
+  text-decoration: underline;
+  cursor: pointer;
+}
