@@ -13,13 +13,14 @@
     "orchestrate:smoke": "node scripts/smoke-orchestrator.mjs"
   },
   "dependencies": {
-    "@google/genai": "^1.0.0",
+    "@google/genai": "^2.31.0",
     "three": "^0.170.0"
   },
   "devDependencies": {
     "@napi-rs/canvas": "^0.1.65",
     "@types/node": "^22.0.0",
     "@types/three": "^0.170.0",
+    "playwright": "^1.60.0",
     "typescript": "^5.6.3",
     "vite": "^5.4.10",
     "vitest": "^2.1.4"

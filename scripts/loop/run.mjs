@@ -4,10 +4,9 @@ import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   callModel,
-  ensurePersistentSpendState,
+  ensureTraceStateInitialized as ensurePersistentSpendState,
   createLoopWorktree,
   removeLoopWorktree,
-  mergeLoopWorktree,
 } from '../lib/orchestrator.mjs';
 import {
   loadLoopConfig,
@@ -246,6 +245,59 @@ export async function escalateToLeadArchitect({
 /**
  * Generates static `runs/loop/<runId>/dashboard.html` after every iteration (§5).
  */
+// Merges the loop branch into baseBranch; on conflict, aborts and reports the files.
+function mergeLoopWorktree(rootDir, wtDir, runId, baseBranch = 'main') {
+  const safeId = String(runId).replace(/[^a-zA-Z0-9_-]/g, '_');
+  const branchName = `loop/${safeId}`;
+
+  // Remove the worktree checkout first so branch/worktree locks don't interfere
+  removeLoopWorktree(rootDir, wtDir, branchName, false);
+
+  try {
+    const currentBranch = execSync('git rev-parse --abbrev-ref HEAD', {
+      cwd: rootDir,
+      encoding: 'utf8',
+    }).trim();
+    if (currentBranch !== baseBranch) {
+      execSync(`git checkout "${baseBranch}"`, { cwd: rootDir, stdio: 'pipe' });
+    }
+    execSync(`git merge --no-ff "${branchName}" -m "Merge ${branchName} into ${baseBranch}"`, {
+      cwd: rootDir,
+      stdio: 'pipe',
+    });
+    return {
+      merged: true,
+      conflict: false,
+      conflictingFiles: [],
+      branch: branchName,
+    };
+  } catch {
+    let conflictingFiles = [];
+    try {
+      const out = execSync('git diff --name-only --diff-filter=U', {
+        cwd: rootDir,
+        encoding: 'utf8',
+      }).trim();
+      if (out) {
+        conflictingFiles = out.split('\n').map((s) => s.trim()).filter(Boolean);
+      }
+    } catch {
+      // ignore
+    }
+    try {
+      execSync('git merge --abort', { cwd: rootDir, stdio: 'pipe' });
+    } catch {
+      // ignore
+    }
+    return {
+      merged: false,
+      conflict: true,
+      conflictingFiles,
+      branch: branchName,
+    };
+  }
+}
+
 export function generateDashboardHtml(runDir, loopState) {
   const {
     runId,

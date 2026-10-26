@@ -2,19 +2,17 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import * as orchestratorMod from '../scripts/lib/orchestrator.mjs';
-
-const {
+import {
   loadRoles,
   loadPricing,
   computeCostUsd,
   validateOwnership,
   buildWaves,
+  runOrchestrator,
   callModel,
   runToolLoop,
-  loadPersistentSpend,
-  runOrchestrator,
-} = orchestratorMod as Record<string, any>;
+  loadTraceState,
+} from '../scripts/lib/orchestrator.mjs';
 
 function createTempWorkspace() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tiers-orch-test-'));
@@ -24,7 +22,7 @@ function createTempWorkspace() {
   return tmp;
 }
 
-describe('Subagent Orchestrator (Prompt 0 & Prompt 2 §0 Upgrades)', () => {
+describe('Subagent Orchestrator (Prompt 0)', () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -215,43 +213,33 @@ describe('Subagent Orchestrator (Prompt 0 & Prompt 2 §0 Upgrades)', () => {
     });
   });
 
-  it('runs thinking="high" calls with background=true, polls interactions.get with backoff, and cancels + retries stalled calls past pollTimeoutMs (§0.1)', async () => {
+  it('cancels background interaction past pollTimeoutMs deadline and retries with backoff', async () => {
     const tracePath = path.join(tmpDir, 'runs/orchestrator/trace.jsonl');
-    const createPayloads: any[] = [];
-    const polledIds: string[] = [];
     const cancelledIds: string[] = [];
-    let createCount = 0;
-    let secondAttemptPolls = 0;
+    let createCalls = 0;
 
-    const fakeInteractionsClient = {
-      async create(payload: any) {
-        createCount += 1;
-        createPayloads.push(payload);
-        if (createCount === 1) {
-          // Stalls in_progress past deadline
-          return { id: 'int_stalled_1', status: 'in_progress' };
-        }
-        return { id: 'int_recovered_2', status: 'in_progress' };
-      },
-      async get(id: string) {
-        polledIds.push(id);
-        if (id === 'int_stalled_1') {
+    const fakeAiClient = {
+      interactions: {
+        create: async (payload: any) => {
+          createCalls += 1;
+          expect(payload.background).toBe(true);
+          if (createCalls === 1) {
+            return { id: 'stuck_int_1', status: 'in_progress' };
+          }
+          return {
+            id: 'recovered_int_2',
+            status: 'completed',
+            output_text: '{"ok":true}',
+            usage: { total_input_tokens: 120, total_output_tokens: 60 },
+          };
+        },
+        get: async (id: string) => {
           return { id, status: 'in_progress' };
-        }
-        secondAttemptPolls += 1;
-        if (secondAttemptPolls < 2) {
-          return { id, status: 'in_progress' };
-        }
-        return {
-          id,
-          status: 'completed',
-          usage: { total_input_tokens: 500, total_output_tokens: 200 },
-          steps: [{ type: 'model_output', content: [{ type: 'text', text: '{"recovered":true}' }] }],
-        };
-      },
-      async cancel(id: string) {
-        cancelledIds.push(id);
-        return { id, status: 'cancelled' };
+        },
+        cancel: async (id: string) => {
+          cancelledIds.push(id);
+          return { id, status: 'cancelled' };
+        },
       },
     };
 
@@ -262,53 +250,50 @@ describe('Subagent Orchestrator (Prompt 0 & Prompt 2 §0 Upgrades)', () => {
       input: 'Grade clip',
       taskId: 'deadline_test',
       pollTimeoutMs: 60,
-      pollIntervalMs: 15,
-      retryBackoffMs: 10,
+      pollInitialMs: 15,
+      retryBaseMs: 10,
       rootDir: tmpDir,
       tracePath,
-      interactionsClient: fakeInteractionsClient,
+      aiClient: fakeAiClient,
     });
 
-    expect(createPayloads[0].background).toBe(true);
-    expect(cancelledIds).toContain('int_stalled_1');
-    expect(polledIds).toContain('int_stalled_1');
-    expect(polledIds).toContain('int_recovered_2');
-    expect(res.interactionId).toBe('int_recovered_2');
-    expect(res.output).toEqual({ recovered: true });
+    expect(createCalls).toBe(2);
+    expect(cancelledIds).toEqual(['stuck_int_1']);
+    expect(res.interactionId).toBe('recovered_int_2');
+    expect(res.output).toEqual({ ok: true });
   });
 
-  it('initializes cumulative spend and call count from runs/orchestrator/trace.jsonl across processes (§0.2)', async () => {
+  it('initializes cumulative spend and call count from trace.jsonl across processes', async () => {
     const tracePath = path.join(tmpDir, 'runs/orchestrator/trace.jsonl');
 
-    // Process 1 spends $0.04 (10k input = $0.02, 2k output = $0.02)
+    // Process 1 spends $0.04
     await callModel({
       role: 'lead_architect',
       model: 'gemini-4-argon',
       thinking: 'high',
-      input: 'First process call',
+      input: 'Call 1',
       taskId: 'proc1_call',
       rootDir: tmpDir,
       tracePath,
-      budgetUsd: 0.06,
       fakeHandler: async () => ({
         interactionId: 'int_proc1',
-        inputTokens: 10_000,
-        outputTokens: 2_000,
+        inputTokens: 10_000, // $0.02
+        outputTokens: 2_000, // $0.02 -> $0.04
         output: { ok: 1 },
       }),
     });
 
-    const persisted = loadPersistentSpend(tracePath);
-    expect(persisted.totalCalls).toBe(1);
-    expect(persisted.totalCostUsd).toBe(0.04);
+    const loaded = loadTraceState(tracePath);
+    expect(loaded.totalCalls).toBe(1);
+    expect(loaded.totalCostUsd).toBe(0.04);
 
-    // Process 2 starts with a fresh state object, inherits $0.04 from trace.jsonl, and hits $0.06 cap on next $0.04 call
+    // Process 2 with a fresh state object and budgetUsd = $0.06 should fail on another $0.04 call ($0.04 + $0.04 = $0.08 > $0.06)
     await expect(
       callModel({
         role: 'lead_architect',
         model: 'gemini-4-argon',
         thinking: 'high',
-        input: 'Second process call',
+        input: 'Call 2',
         taskId: 'proc2_call',
         rootDir: tmpDir,
         tracePath,
@@ -323,134 +308,89 @@ describe('Subagent Orchestrator (Prompt 0 & Prompt 2 §0 Upgrades)', () => {
     ).rejects.toThrow(/Budget cap/);
   });
 
-  it('runs a multi-turn function-calling loop via runToolLoop under ORCH_FAKE=1 and meters each turn (§0.3)', async () => {
+  it('runs multi-turn runToolLoop until finish or maxToolCalls and traces every turn', async () => {
     const tracePath = path.join(tmpDir, 'runs/orchestrator/trace.jsonl');
-    const executedTools: Array<{ name: string; args: any }> = [];
+    const executedCalls: Array<{ name: string; arguments: any }> = [];
 
     const tools = [
       {
-        name: 'list_files',
-        description: 'List files',
-        parameters: { type: 'object', properties: { dir: { type: 'string' } } },
-        handler: async (args: any) => {
-          executedTools.push({ name: 'list_files', args });
-          return { files: ['src/main.ts', 'src/render/renderer.ts'] };
-        },
-      },
-      {
-        name: 'edit_file',
-        description: 'Edit file',
+        type: 'function',
+        name: 'read_file',
+        description: 'Read a file',
         parameters: { type: 'object', properties: { path: { type: 'string' } } },
-        handler: async (args: any) => {
-          executedTools.push({ name: 'edit_file', args });
-          return { ok: true };
-        },
       },
       {
+        type: 'function',
+        name: 'edit_file',
+        description: 'Edit a file',
+        parameters: { type: 'object', properties: { path: { type: 'string' } } },
+      },
+      {
+        type: 'function',
         name: 'finish',
-        description: 'Finish patcher turn',
-        parameters: { type: 'object', properties: { report: { type: 'object' } } },
-        handler: async (args: any) => {
-          executedTools.push({ name: 'finish', args });
-          return { ok: true, report: args.report };
-        },
+        description: 'Finish patch',
+        parameters: { type: 'object', properties: { summary: { type: 'string' } } },
       },
     ];
 
-    const result = await runToolLoop({
+    const res = await runToolLoop({
       role: 'patcher',
       model: 'gemini-4-argon',
       thinking: 'high',
       tools,
-      input: 'Fix defect still-O3-3d-1',
-      taskId: 'patch_iter_1',
-      maxToolCalls: 10,
-      deadlineMs: 30_000,
+      input: 'Fix bug D1',
+      taskId: 'patch_iter1',
+      maxToolCalls: 5,
       rootDir: tmpDir,
       tracePath,
-      fakeToolTurns: [
-        [{ id: 'c1', name: 'list_files', arguments: { dir: 'src' } }],
-        [{ id: 'c2', name: 'edit_file', arguments: { path: 'src/render/renderer.ts' } }],
+      fakeToolScript: [
+        [{ name: 'read_file', arguments: { path: 'src/render/renderer.ts' } }],
+        [{ name: 'edit_file', arguments: { path: 'src/render/renderer.ts', search: 'a', replace: 'b' } }],
         [
           {
-            id: 'c3',
             name: 'finish',
             arguments: {
-              report: {
-                summary: 'Grounded floating props in renderer.ts',
-                addressed: [
-                  {
-                    defectId: 'still-O3-3d-1',
-                    files: ['src/render/renderer.ts'],
-                    change: 'Grounded tree props on terrain elevation',
-                    verified: 'both',
-                  },
-                ],
-                skipped: [],
-              },
+              summary: 'Fixed prop grounding',
+              addressed: [{ defectId: 'still-O3-3d-1', files: ['src/render/renderer.ts'], change: 'Grounded prop', verified: 'both' }],
             },
           },
         ],
       ],
-    });
-
-    expect(result.finished).toBe(true);
-    expect(result.turns).toBe(3);
-    expect(result.toolCallsUsed).toBe(3);
-    expect(executedTools.map((t) => t.name)).toEqual(['list_files', 'edit_file', 'finish']);
-    expect(result.report.summary).toBe('Grounded floating props in renderer.ts');
-
-    const traceLines = fs
-      .readFileSync(tracePath, 'utf8')
-      .trim()
-      .split('\n')
-      .map((l) => JSON.parse(l));
-    expect(traceLines).toHaveLength(3);
-    expect(traceLines[1].previousInteractionId).toBe(traceLines[0].interactionId);
-    expect(traceLines[2].previousInteractionId).toBe(traceLines[1].interactionId);
-  });
-  it('caps large tool results and rolls the conversation over once a turn passes contextTokenBudget', async () => {
-    const tracePath = path.join(tmpDir, 'runs/orchestrator/trace.jsonl');
-    const seen: any[] = [];
-    let turn = 0;
-    const fakeHandler = async ({ input, previousInteractionId }: any) => {
-      seen.push({ input, previousInteractionId });
-      turn += 1;
-      const functionCalls =
-        turn < 3
-          ? [{ id: `c${turn}`, name: 'read_file', arguments: { path: 'src/big.ts' } }]
-          : [{ id: 'f', name: 'finish', arguments: { report: { summary: 'done', addressed: [] } } }];
-      return { interactionId: `i${turn}`, inputTokens: turn === 1 ? 70_000 : 1_000, outputTokens: 10, functionCalls };
-    };
-
-    const res = await runToolLoop({
-      tools: [
-        {
-          name: 'read_file',
-          handler: async () => ({ ok: true, startLine: 1, endLine: 150, totalLines: 2000, content: 'x'.repeat(20_000) }),
-        },
-        { name: 'finish', handler: async (a: any) => ({ ok: true, report: a.report }) },
-      ],
-      input: [{ type: 'text', text: 'TASK: fix the bridge camera' }],
-      taskId: 'rollover_test',
-      rootDir: tmpDir,
-      tracePath,
-      fakeHandler,
-      contextTokenBudget: 60_000,
-      maxToolResultChars: 8_000,
+      executeTool: async (call: any) => {
+        executedCalls.push({ name: call.name, arguments: call.arguments });
+        if (call.name === 'read_file') return '1: const a = 1;';
+        if (call.name === 'edit_file') return { ok: true };
+        return call.arguments;
+      },
     });
 
     expect(res.finished).toBe(true);
-    expect(res.rollovers).toBe(1);
-    // Turn 2 starts a fresh interaction carrying the task, the call log and the latest result as text.
-    expect(seen[1].previousInteractionId).toBeUndefined();
-    const texts = seen[1].input.map((p: any) => p.text || '');
-    expect(texts.join('\n')).toContain('TASK: fix the bridge camera');
-    expect(texts.join('\n')).toContain('CONTEXT RESET');
-    expect(texts.join('\n')).toContain('read_file({"path":"src/big.ts"}) -> lines 1-150 of 2000');
-    const latest = texts.find((t: string) => t.startsWith('[Result of read_file]'));
-    expect(latest.length).toBeLessThan(8_200);
-    // Under budget again, so turn 3 continues the new interaction.
-    expect(seen[2].previousInteractionId).toBe('i2');
+    expect(res.finishReason).toBe('finish');
+    expect(res.report.summary).toBe('Fixed prop grounding');
+    expect(executedCalls).toHaveLength(3);
+    expect(res.state.totalCalls).toBe(3);
+
+    // Also verify maxToolCalls cap stops the loop
+    const cappedRes = await runToolLoop({
+      role: 'patcher',
+      model: 'gemini-4-argon',
+      thinking: 'high',
+      tools,
+      input: 'Infinite calls',
+      taskId: 'patch_capped',
+      maxToolCalls: 2,
+      rootDir: tmpDir,
+      tracePath,
+      fakeToolScript: [
+        [{ name: 'read_file', arguments: { path: 'a.ts' } }],
+        [{ name: 'read_file', arguments: { path: 'b.ts' } }],
+        [{ name: 'read_file', arguments: { path: 'c.ts' } }],
+      ],
+      executeTool: async () => 'ok',
+    });
+
+    expect(cappedRes.finished).toBe(false);
+    expect(cappedRes.finishReason).toBe('max_tool_calls');
+    expect(cappedRes.toolCallsCount).toBe(2);
   });
 });

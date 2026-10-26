@@ -6,7 +6,6 @@ import { checkImportBoundaries } from '../gates/imports.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ROOT = path.resolve(__dirname, '../..');
-const INTERACTIONS_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 
 export function loadRoles(rootDir = DEFAULT_ROOT) {
   const raw = fs.readFileSync(path.join(rootDir, 'agents/roles.json'), 'utf8');
@@ -30,67 +29,45 @@ export function computeCostUsd(model, inputTokens, outputTokens, pricing) {
 }
 
 /**
- * Reads cumulative spend and call count from `tracePath` (`runs/orchestrator/trace.jsonl`)
+ * Reads cumulative spend and call count from an existing trace.jsonl file
  * so budget and call caps persist across processes.
  */
-export function loadPersistentSpend(tracePath) {
+export function loadTraceState(tracePath) {
   let totalCostUsd = 0;
   let totalCalls = 0;
-  if (!tracePath || !fs.existsSync(tracePath)) {
-    return { totalCostUsd: 0, totalCalls: 0 };
-  }
-  try {
+  if (tracePath && fs.existsSync(tracePath)) {
     const raw = fs.readFileSync(tracePath, 'utf8');
-    const lines = raw.split('\n');
-    for (const line of lines) {
+    for (const line of raw.split('\n')) {
       const trimmed = line.trim();
       if (!trimmed) continue;
       try {
         const entry = JSON.parse(trimmed);
         if (entry && entry.status === 'ok') {
+          totalCalls += 1;
           const c = Number(entry.costUsd || 0);
           if (Number.isFinite(c)) {
             totalCostUsd = Number((totalCostUsd + c).toFixed(6));
           }
-          totalCalls += 1;
         }
       } catch {
         // Ignore malformed trace line
       }
     }
-  } catch {
-    // Ignore read error
   }
-  return { totalCostUsd, totalCalls };
+  return { totalCostUsd, totalCalls, _initializedFromTrace: tracePath };
 }
 
-/**
- * Ensures `state` is initialized once from `tracePath` so cumulative spend holds across processes
- * without double-counting calls made within the same `state` object in the current process.
- */
-export function ensurePersistentSpendState(state, tracePath) {
-  const target = state || { totalCostUsd: 0, totalCalls: 0 };
-  if (typeof target.totalCostUsd !== 'number' || Number.isNaN(target.totalCostUsd)) {
-    target.totalCostUsd = 0;
+export function ensureTraceStateInitialized(state, tracePath) {
+  if (!state) {
+    return loadTraceState(tracePath);
   }
-  if (typeof target.totalCalls !== 'number' || Number.isNaN(target.totalCalls)) {
-    target.totalCalls = 0;
+  if (tracePath && state._initializedFromTrace !== tracePath) {
+    const persisted = loadTraceState(tracePath);
+    state.totalCostUsd = Number(((state.totalCostUsd || 0) + persisted.totalCostUsd).toFixed(6));
+    state.totalCalls = (state.totalCalls || 0) + persisted.totalCalls;
+    state._initializedFromTrace = tracePath;
   }
-  if (!target._loadedTracePaths) {
-    Object.defineProperty(target, '_loadedTracePaths', {
-      value: new Set(),
-      enumerable: false,
-      writable: true,
-      configurable: true,
-    });
-  }
-  if (tracePath && !target._loadedTracePaths.has(tracePath)) {
-    const persisted = loadPersistentSpend(tracePath);
-    target.totalCostUsd = Number((target.totalCostUsd + persisted.totalCostUsd).toFixed(6));
-    target.totalCalls += persisted.totalCalls;
-    target._loadedTracePaths.add(tracePath);
-  }
-  return target;
+  return state;
 }
 
 const PROTECTED_PREFIXES = ['tests/', 'rubric/', 'scripts/gates/'];
@@ -120,8 +97,6 @@ export function validateOwnership(roleSpec, targetPath, rootDir = DEFAULT_ROOT) 
     return candidate === cleanRule;
   };
 
-  // Protected path check: rubric/ and scripts/gates/ are always protected;
-  // tests/ is protected unless explicitly listed in roleSpec.ownsPaths.
   for (const prot of PROTECTED_PREFIXES) {
     if (matchesRule(prot, rel)) {
       const explicitlyOwnedTest =
@@ -191,175 +166,62 @@ async function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function sanitizeResponseSchema(schema) {
-  if (!schema || typeof schema !== 'object') return undefined;
-  const clone = JSON.parse(JSON.stringify(schema));
-  delete clone.$schema;
-  delete clone.title;
-  return clone;
-}
-
-function normalizeWireInput(input, defaultMediaResolution = 'high') {
-  if (typeof input === 'string') return input;
-  if (Array.isArray(input)) {
-    return input.map((item) => {
-      if (!item || typeof item !== 'object') return { type: 'text', text: String(item) };
-      if (item.type === 'text') {
-        return { type: 'text', text: String(item.text ?? '') };
+function withTimeout(promise, ms, label = 'operation') {
+  if (!Number.isFinite(ms) || ms <= 0) return promise;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const err = new Error(`Deadline exceeded (${ms}ms) during ${label}`);
+      err.code = 'DEADLINE_EXCEEDED';
+      err.retryable = true;
+      reject(err);
+    }, ms);
+    promise.then(
+      (val) => {
+        clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
       }
-      if (item.type === 'image') {
-        const res = item.resolution || item.media_resolution || item.mediaResolution || defaultMediaResolution;
-        const out = {
-          type: 'image',
-          mime_type: item.mime_type || item.mimeType || 'image/png',
-          ...(res ? { resolution: res } : {}),
-        };
-        if (item.data) out.data = item.data;
-        if (item.uri) out.uri = item.uri;
-        return out;
-      }
-      if (item.type === 'video') {
-        const res = item.resolution || item.media_resolution || item.mediaResolution || defaultMediaResolution;
-        const out = {
-          type: 'video',
-          mime_type: item.mime_type || item.mimeType || 'video/webm',
-          ...(res ? { resolution: res } : {}),
-        };
-        if (item.uri) out.uri = item.uri;
-        if (item.data) out.data = item.data;
-        return out;
-      }
-      if (item.type === 'function_result') {
-        return {
-          type: 'function_result',
-          call_id: item.call_id || item.callId || item.id,
-          name: item.name,
-          result: item.result ?? { ok: true },
-        };
-      }
-      return item;
-    });
-  }
-  return JSON.stringify(input);
-}
-
-function extractInteractionParts(interaction) {
-  const steps = Array.isArray(interaction?.steps) ? interaction.steps : [];
-  const functionCalls = [];
-  const textParts = [];
-
-  for (const step of steps) {
-    if (step.type === 'function_call') {
-      functionCalls.push({
-        id: step.id || `call_${functionCalls.length + 1}`,
-        name: step.name,
-        arguments: step.arguments || step.args || {},
-      });
-    } else if (step.type === 'model_output' && Array.isArray(step.content)) {
-      for (const c of step.content) {
-        if (c.type === 'text' && typeof c.text === 'string') {
-          textParts.push(c.text);
-        } else if (c.type === 'function_call') {
-          functionCalls.push({
-            id: c.id || `call_${functionCalls.length + 1}`,
-            name: c.name,
-            arguments: c.arguments || c.args || {},
-          });
-        }
-      }
-    }
-  }
-
-  if (Array.isArray(interaction?.functionCalls)) {
-    for (const fc of interaction.functionCalls) {
-      functionCalls.push({
-        id: fc.id || `call_${functionCalls.length + 1}`,
-        name: fc.name,
-        arguments: fc.arguments || fc.args || {},
-      });
-    }
-  }
-
-  const combinedText =
-    textParts.join('\n').trim() ||
-    interaction?.output_text ||
-    interaction?.text ||
-    (interaction?.output ? JSON.stringify(interaction.output) : '');
-
-  let parsed = null;
-  if (combinedText) {
-    try {
-      const clean = combinedText
-        .replace(/^```json\s*/i, '')
-        .replace(/^```\s*/i, '')
-        .replace(/```\s*$/, '')
-        .trim();
-      parsed = JSON.parse(clean);
-    } catch {
-      parsed = { files: [], notes: combinedText, board: [], text: combinedText };
-    }
-  } else if (functionCalls.length > 0) {
-    parsed = { functionCalls };
-  } else {
-    parsed = { files: [], notes: '', board: [] };
-  }
-
-  if (parsed && typeof parsed === 'object' && functionCalls.length > 0) {
-    parsed.functionCalls = functionCalls;
-  }
-
-  const usage = interaction?.usage || {};
-  const inputTokens = Number(usage.total_input_tokens ?? usage.input_tokens ?? interaction?.inputTokens ?? 350);
-  const outputTokens = Number(
-    (usage.total_output_tokens ?? usage.output_tokens ?? interaction?.outputTokens ?? 220) +
-      (usage.total_thought_tokens ?? 0)
-  );
-
-  return {
-    interactionId: interaction?.id || interaction?.interactionId || `live_${Date.now()}`,
-    inputTokens,
-    outputTokens,
-    output: parsed,
-    functionCalls,
-    text: combinedText,
-    raw: interaction,
-  };
+    );
+  });
 }
 
 export async function callModel({
   role,
   model = 'gemini-4-argon',
   thinking = 'medium',
-  mediaResolution = undefined,
-  media_resolution = undefined,
   input,
   tools = undefined,
+  systemInstruction = undefined,
   taskId = 'adhoc',
   background = false,
-  pollTimeoutMs = 90_000,
-  pollIntervalMs = 250,
-  retryBackoffMs = 50,
-  maxRetries = 3,
   maxOutputTokens = 65536,
   previousInteractionId = undefined,
   schema = undefined,
+  pollTimeoutMs = 90_000,
+  pollInitialMs = 250,
+  maxRetries = 3,
+  retryBaseMs = 50,
   rootDir = DEFAULT_ROOT,
   tracePath = path.join(rootDir, 'runs/orchestrator/trace.jsonl'),
   state = undefined,
   budgetUsd = Infinity,
   maxCalls = Infinity,
   fakeHandler = undefined,
-  interactionsClient = undefined,
+  aiClient = undefined,
 }) {
   const pricing = loadPricing(rootDir);
-  const spendState = ensurePersistentSpendState(state, tracePath);
-  const effectiveMediaResolution = mediaResolution || media_resolution || (thinking === 'high' ? 'high' : undefined);
+  const activeState = ensureTraceStateInitialized(state || { totalCostUsd: 0, totalCalls: 0 }, tracePath);
+
+  // Long or thinking: "high" calls always run with background: true
   const effectiveBackground = Boolean(background || thinking === 'high');
 
-  if (spendState.totalCalls + 1 > maxCalls || spendState.totalCostUsd >= budgetUsd) {
+  if (activeState.totalCalls + 1 > maxCalls || activeState.totalCostUsd >= budgetUsd) {
     const resumeCmd = `node scripts/smoke-orchestrator.mjs --resume --task ${taskId}`;
     const err = new Error(
-      `Spend/call cap reached before task '${taskId}' (calls=${spendState.totalCalls}/${maxCalls}, cost=$${spendState.totalCostUsd.toFixed(4)}/$${budgetUsd}). Resume with: ${resumeCmd}`
+      `Spend/call cap reached before task '${taskId}' (calls=${activeState.totalCalls}/${maxCalls}, cost=$${activeState.totalCostUsd.toFixed(4)}/$${budgetUsd}). Resume with: ${resumeCmd}`
     );
     err.code = 'SPEND_CAP_EXCEEDED';
     err.resumeCommand = resumeCmd;
@@ -372,46 +234,43 @@ export async function callModel({
   while (true) {
     try {
       let response;
-      if (
-        !interactionsClient &&
-        (process.env.ORCH_FAKE === '1' || typeof fakeHandler === 'function')
-      ) {
+      if ((process.env.ORCH_FAKE === '1' && !aiClient) || typeof fakeHandler === 'function') {
         const handler = fakeHandler || defaultFakeHandler;
-        response = await runWithDeadline(
-          () =>
+        response = await withTimeout(
+          Promise.resolve(
             handler({
               role,
               model,
               thinking,
-              mediaResolution: effectiveMediaResolution,
-              media_resolution: effectiveMediaResolution,
               input,
               tools,
+              systemInstruction,
               taskId,
               background: effectiveBackground,
-              pollTimeoutMs,
               maxOutputTokens,
               previousInteractionId,
               schema,
+              pollTimeoutMs,
               attempt,
-            }),
+            })
+          ),
           pollTimeoutMs,
-          `fake_${taskId}_${attempt}`
+          `fakeHandler(${taskId})`
         );
       } else {
         response = await invokeLiveInteractionsApi({
           model,
           thinking,
-          mediaResolution: effectiveMediaResolution,
           input,
           tools,
+          systemInstruction,
           background: effectiveBackground,
-          pollTimeoutMs,
-          pollIntervalMs,
           maxOutputTokens,
           previousInteractionId,
           schema,
-          interactionsClient,
+          pollTimeoutMs,
+          pollInitialMs,
+          aiClient,
         });
       }
 
@@ -419,32 +278,26 @@ export async function callModel({
       const outputTokens = Number(response.outputTokens ?? 180);
       const costUsd = computeCostUsd(model, inputTokens, outputTokens, pricing);
 
-      if (spendState.totalCostUsd + costUsd > budgetUsd) {
+      if (activeState.totalCostUsd + costUsd > budgetUsd) {
         const resumeCmd = `node scripts/smoke-orchestrator.mjs --resume --task ${taskId}`;
         const err = new Error(
-          `Budget cap ($${budgetUsd}) exceeded on task '${taskId}' (projected $${(spendState.totalCostUsd + costUsd).toFixed(4)}). Resume with: ${resumeCmd}`
+          `Budget cap ($${budgetUsd}) exceeded on task '${taskId}' (projected $${(activeState.totalCostUsd + costUsd).toFixed(4)}). Resume with: ${resumeCmd}`
         );
         err.code = 'SPEND_CAP_EXCEEDED';
         err.resumeCommand = resumeCmd;
         throw err;
       }
 
-      spendState.totalCalls += 1;
-      spendState.totalCostUsd = Number((spendState.totalCostUsd + costUsd).toFixed(6));
+      activeState.totalCalls += 1;
+      activeState.totalCostUsd = Number((activeState.totalCostUsd + costUsd).toFixed(6));
 
-      const interactionId = response.interactionId || `int_${taskId}_${spendState.totalCalls}`;
-      const functionCalls =
-        response.functionCalls ||
-        response.output?.functionCalls ||
-        [];
-
+      const interactionId = response.interactionId || `int_${taskId}_${activeState.totalCalls}`;
       const traceEntry = {
         ts: new Date().toISOString(),
         taskId,
         role,
         model,
         thinking,
-        ...(effectiveMediaResolution ? { mediaResolution: effectiveMediaResolution } : {}),
         inputTokens,
         outputTokens,
         costUsd,
@@ -457,8 +310,9 @@ export async function callModel({
 
       return {
         output: response.output,
-        functionCalls,
-        text: response.text,
+        rawText: response.rawText ?? '',
+        functionCalls: response.functionCalls || [],
+        status: response.status || 'completed',
         interactionId,
         inputTokens,
         outputTokens,
@@ -468,13 +322,13 @@ export async function callModel({
       if (err.code === 'SPEND_CAP_EXCEEDED') throw err;
       const status = err.status || err.statusCode;
       const retryable =
-        status === 429 ||
-        (status >= 500 && status < 600) ||
+        err.retryable === true ||
         err.code === 'DEADLINE_EXCEEDED' ||
-        err.retryable === true;
+        status === 429 ||
+        (status >= 500 && status < 600);
       if (retryable && attempt < maxRetries) {
         attempt += 1;
-        await sleep(retryBackoffMs * Math.pow(2, attempt));
+        await sleep(retryBaseMs * Math.pow(2, attempt));
         continue;
       }
       appendTrace(tracePath, {
@@ -496,56 +350,7 @@ export async function callModel({
   }
 }
 
-async function runWithDeadline(fn, deadlineMs, label = 'call') {
-  if (!Number.isFinite(deadlineMs) || deadlineMs <= 0) {
-    return fn();
-  }
-  let timer = null;
-  try {
-    return await Promise.race([
-      fn(),
-      new Promise((_, reject) => {
-        timer = setTimeout(() => {
-          const err = new Error(`Call '${label}' exceeded deadline of ${deadlineMs}ms`);
-          err.code = 'DEADLINE_EXCEEDED';
-          err.status = 504;
-          err.retryable = true;
-          reject(err);
-        }, deadlineMs);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-async function defaultFakeHandler({ taskId, role, previousInteractionId, tools }) {
-  const hasFinishTool = Array.isArray(tools) && tools.some((t) => t.name === 'finish');
-  if (hasFinishTool) {
-    return {
-      interactionId: `fake_${taskId}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      inputTokens: 400,
-      outputTokens: 200,
-      functionCalls: [
-        {
-          id: 'call_finish_1',
-          name: 'finish',
-          arguments: {
-            report: {
-              summary: `Completed fake patcher turn for ${taskId}`,
-              addressed: [],
-              skipped: [],
-            },
-          },
-        },
-      ],
-      output: {
-        summary: `Completed fake patcher turn for ${taskId}`,
-        addressed: [],
-        skipped: [],
-      },
-    };
-  }
+async function defaultFakeHandler({ taskId, role, previousInteractionId }) {
   return {
     interactionId: `fake_${taskId}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
     inputTokens: 400,
@@ -555,505 +360,519 @@ async function defaultFakeHandler({ taskId, role, previousInteractionId, tools }
       notes: `Fake execution completed for ${taskId} (${role}), prev=${previousInteractionId || 'none'}`,
       board: [],
     },
+    functionCalls: [],
+    status: 'completed',
   };
 }
 
-function createRestInteractionsClient(apiKey) {
-  return {
-    async create(payload, timeoutMs = 90_000) {
-      const res = await fetch(`${INTERACTIONS_BASE_URL}?key=${encodeURIComponent(apiKey)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(Math.max(1000, timeoutMs)),
-      });
-      const text = await res.text();
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch {
-        data = { rawText: text };
-      }
-      if (!res.ok) {
-        const err = new Error(
-          `Interactions API create failed (${res.status}): ${data?.error?.message || text.slice(0, 300)}`
-        );
-        err.status = res.status;
-        err.retryable = res.status === 429 || res.status >= 500;
-        throw err;
-      }
-      return data;
-    },
-    async get(id, timeoutMs = 30_000) {
-      const res = await fetch(
-        `${INTERACTIONS_BASE_URL}/${encodeURIComponent(id)}?key=${encodeURIComponent(apiKey)}`,
-        {
-          method: 'GET',
-          signal: AbortSignal.timeout(Math.max(500, timeoutMs)),
-        }
-      );
-      const text = await res.text();
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch {
-        data = { rawText: text };
-      }
-      if (!res.ok) {
-        const err = new Error(
-          `Interactions API get(${id}) failed (${res.status}): ${data?.error?.message || text.slice(0, 300)}`
-        );
-        err.status = res.status;
-        err.retryable = res.status === 429 || res.status >= 500;
-        throw err;
-      }
-      return data;
-    },
-    async cancel(id) {
-      try {
-        const res = await fetch(
-          `${INTERACTIONS_BASE_URL}/${encodeURIComponent(id)}/cancel?key=${encodeURIComponent(apiKey)}`,
-          {
-            method: 'POST',
-            signal: AbortSignal.timeout(10_000),
+function cleanJsonSchemaForApi(schema) {
+  if (!schema || typeof schema !== 'object') return schema;
+  const copy = JSON.parse(JSON.stringify(schema));
+  delete copy.$schema;
+  delete copy.title;
+  return copy;
+}
+
+function extractInteractionOutputs(interaction) {
+  const functionCalls = [];
+  const textParts = [];
+
+  if (Array.isArray(interaction?.steps)) {
+    for (const step of interaction.steps) {
+      if (step.type === 'function_call') {
+        functionCalls.push({
+          id: step.id,
+          name: step.name,
+          arguments: step.arguments || {},
+        });
+      } else if (step.type === 'model_output' && Array.isArray(step.content)) {
+        for (const item of step.content) {
+          if (item.type === 'text' && typeof item.text === 'string') {
+            textParts.push(item.text);
+          } else if (item.type === 'function_call') {
+            functionCalls.push({
+              id: item.id,
+              name: item.name,
+              arguments: item.arguments || {},
+            });
           }
-        );
-        return await res.json().catch(() => ({ id, status: 'cancelled' }));
-      } catch {
-        return { id, status: 'cancelled' };
+        }
       }
-    },
-  };
+    }
+  }
+
+  if (Array.isArray(interaction?.outputs)) {
+    for (const out of interaction.outputs) {
+      if (out.type === 'function_call') {
+        functionCalls.push({
+          id: out.id,
+          name: out.name,
+          arguments: out.arguments || {},
+        });
+      } else if (out.type === 'text' && typeof out.text === 'string') {
+        textParts.push(out.text);
+      }
+    }
+  }
+
+  const rawText =
+    interaction?.output_text ||
+    interaction?.text ||
+    (textParts.length > 0 ? textParts.join('\n') : '');
+
+  let parsed = null;
+  if (rawText) {
+    try {
+      const clean = rawText
+        .replace(/^```json\s*/i, '')
+        .replace(/```\s*$/, '')
+        .trim();
+      parsed = JSON.parse(clean);
+    } catch {
+      parsed = { files: [], notes: rawText, board: [] };
+    }
+  } else if (interaction?.output && typeof interaction.output === 'object') {
+    parsed = interaction.output;
+  } else {
+    parsed = { files: [], notes: '', board: [] };
+  }
+
+  return { parsed, rawText, functionCalls };
 }
 
 async function invokeLiveInteractionsApi({
   model,
   thinking,
-  mediaResolution = 'high',
   input,
   tools,
+  systemInstruction,
   background,
-  pollTimeoutMs = 90_000,
-  pollIntervalMs = 250,
+  maxOutputTokens,
   previousInteractionId,
   schema,
-  interactionsClient,
+  pollTimeoutMs = 90_000,
+  pollInitialMs = 250,
+  aiClient = undefined,
 }) {
-  let client = interactionsClient;
-  if (!client) {
+  let ai = aiClient;
+  if (!ai) {
     const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
     if (!apiKey) {
       throw new Error('Missing GEMINI_API_KEY / GOOGLE_API_KEY for live model call');
     }
-    client = createRestInteractionsClient(apiKey);
+    const { GoogleGenAI } = await import('@google/genai');
+    ai = new GoogleGenAI({ apiKey });
   }
 
-  const wireInput = normalizeWireInput(input, mediaResolution);
-  const cleanSchema = sanitizeResponseSchema(schema);
-  const wireTools = Array.isArray(tools)
-    ? tools.map((t) => ({
-        type: 'function',
-        name: t.name,
-        description: t.description || '',
-        parameters: sanitizeResponseSchema(t.parameters) || { type: 'object', properties: {} },
-      }))
-    : undefined;
+  let formattedInput;
+  if (typeof input === 'string' || Array.isArray(input)) {
+    formattedInput = input;
+  } else if (input && typeof input === 'object' && typeof input.type === 'string') {
+    formattedInput = input;
+  } else {
+    formattedInput = JSON.stringify(input);
+  }
 
   const requestPayload = {
     model,
-    input: wireInput,
+    input: formattedInput,
+    generation_config: {
+      thinking_level: thinking,
+      max_output_tokens: maxOutputTokens,
+    },
     ...(background ? { background: true } : {}),
     ...(previousInteractionId ? { previous_interaction_id: previousInteractionId } : {}),
-    ...(wireTools && wireTools.length > 0 ? { tools: wireTools } : {}),
-    ...(cleanSchema ? { response_format: cleanSchema } : {}),
-    generation_config: {
-      thinking_level: thinking || 'high',
-    },
+    ...(systemInstruction ? { system_instruction: systemInstruction } : {}),
+    ...(Array.isArray(tools) && tools.length > 0 ? { tools } : {}),
+    ...(schema
+      ? {
+          response_mime_type: 'application/json',
+          response_format: cleanJsonSchemaForApi(schema),
+        }
+      : {}),
   };
 
-  const deadlineAt = Date.now() + pollTimeoutMs;
-  let interaction = await runWithDeadline(
-    () => client.create(requestPayload, pollTimeoutMs),
-    pollTimeoutMs,
-    `interactions.create(${model})`
-  );
+  if (ai.interactions && typeof ai.interactions.create === 'function') {
+    const callStartMs = Date.now();
+    let interaction = await withTimeout(
+      ai.interactions.create(requestPayload),
+      pollTimeoutMs,
+      'interactions.create'
+    );
 
-  let backoff = pollIntervalMs;
-  while (
-    background &&
-    interaction &&
-    (interaction.status === 'in_progress' ||
-      interaction.status === 'Running' ||
-      interaction.status === 'processing')
-  ) {
-    const now = Date.now();
-    const remaining = deadlineAt - now;
-    if (remaining <= 0) {
-      if (typeof client.cancel === 'function' && interaction.id) {
-        await client.cancel(interaction.id);
+    let backoff = pollInitialMs;
+    while (
+      interaction &&
+      (interaction.status === 'in_progress' || interaction.status === 'Running')
+    ) {
+      const elapsed = Date.now() - callStartMs;
+      if (elapsed >= pollTimeoutMs) {
+        if (typeof ai.interactions.cancel === 'function' && interaction.id) {
+          try {
+            await ai.interactions.cancel(interaction.id);
+          } catch {
+            // Ignore errors during cancellation
+          }
+        }
+        const err = new Error(
+          `Interaction '${interaction.id}' exceeded deadline of ${pollTimeoutMs}ms and was cancelled`
+        );
+        err.code = 'DEADLINE_EXCEEDED';
+        err.retryable = true;
+        err.cancelledInteractionId = interaction.id;
+        throw err;
       }
-      const err = new Error(
-        `Interaction '${interaction.id}' exceeded pollTimeoutMs (${pollTimeoutMs}ms) and was cancelled`
-      );
-      err.code = 'DEADLINE_EXCEEDED';
-      err.status = 504;
+
+      const sleepTime = Math.min(backoff, Math.max(10, pollTimeoutMs - elapsed));
+      await sleep(sleepTime);
+      backoff = Math.min(backoff * 2, 4000);
+
+      const remainingMs = Math.max(50, pollTimeoutMs - (Date.now() - callStartMs));
+      try {
+        interaction = await withTimeout(
+          ai.interactions.get(interaction.id),
+          remainingMs,
+          `interactions.get(${interaction.id})`
+        );
+      } catch (pollErr) {
+        if (pollErr.code === 'DEADLINE_EXCEEDED' && typeof ai.interactions.cancel === 'function') {
+          try {
+            await ai.interactions.cancel(interaction.id);
+          } catch {
+            // Ignore cancel error
+          }
+          pollErr.cancelledInteractionId = interaction.id;
+        }
+        throw pollErr;
+      }
+    }
+
+    if (interaction?.status === 'failed' || interaction?.status === 'cancelled') {
+      const err = new Error(`Interaction ${interaction.id} ended with status '${interaction.status}'`);
+      err.status = 500;
       err.retryable = true;
-      err.cancelledInteractionId = interaction.id;
       throw err;
     }
 
-    const waitMs = Math.min(backoff, remaining);
-    await sleep(waitMs);
-    backoff = Math.min(backoff * 2, 4000);
-
-    if (Date.now() >= deadlineAt) {
-      if (typeof client.cancel === 'function' && interaction.id) {
-        await client.cancel(interaction.id);
-      }
-      const err = new Error(
-        `Interaction '${interaction.id}' exceeded pollTimeoutMs (${pollTimeoutMs}ms) and was cancelled`
-      );
-      err.code = 'DEADLINE_EXCEEDED';
-      err.status = 504;
-      err.retryable = true;
-      err.cancelledInteractionId = interaction.id;
-      throw err;
-    }
-
-    interaction = await runWithDeadline(
-      () => client.get(interaction.id, Math.max(500, deadlineAt - Date.now())),
-      Math.max(50, deadlineAt - Date.now()),
-      `interactions.get(${interaction.id})`
+    const { parsed, rawText, functionCalls } = extractInteractionOutputs(interaction);
+    const usage = interaction?.usage || {};
+    const inputTokens = Number(usage.total_input_tokens ?? usage.input_tokens ?? 350);
+    const outputTokens = Number(
+      (usage.total_output_tokens ?? usage.output_tokens ?? 220) +
+        (usage.total_thought_tokens ?? 0)
     );
-  }
 
-  if (interaction?.status === 'failed' || interaction?.status === 'cancelled') {
-    const err = new Error(
-      `Interaction '${interaction.id}' ended with status '${interaction.status}': ${JSON.stringify(interaction.error || {})}`
-    );
-    err.status = 500;
-    err.retryable = true;
-    throw err;
-  }
-
-  return extractInteractionParts(interaction);
-}
-
-/**
- * Uploads a video or media file via the Gemini Files API and polls until `state === 'ACTIVE'`.
- * Under `ORCH_FAKE=1`, returns a deterministic fake URI without network access.
- */
-export async function uploadMediaFile(filePath, mimeType = 'video/webm', pollTimeoutMs = 90_000) {
-  if (process.env.ORCH_FAKE === '1') {
     return {
-      name: `files/fake_${path.basename(filePath).replace(/[^a-zA-Z0-9_-]/g, '_')}`,
-      uri: `https://generativelanguage.googleapis.com/v1beta/files/fake_${path.basename(filePath)}`,
-      mimeType,
-      state: 'ACTIVE',
+      interactionId: interaction?.id || `live_${Date.now()}`,
+      inputTokens,
+      outputTokens,
+      output: parsed,
+      rawText,
+      functionCalls,
+      status: interaction?.status || 'completed',
     };
   }
-  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-  if (!apiKey) {
-    throw new Error('Missing GEMINI_API_KEY for Files API upload');
+
+  throw new Error('Interactions API is required on the @google/genai client');
+}
+
+function formatToolResultForApi(res) {
+  if (typeof res === 'string') return res;
+  if (Array.isArray(res)) return res;
+  if (res && typeof res === 'object' && Array.isArray(res.content)) {
+    return res.content;
   }
-  const { GoogleGenAI } = await import('@google/genai');
-  const ai = new GoogleGenAI({ apiKey });
-  const deadline = Date.now() + pollTimeoutMs;
-  let fileObj = await ai.files.upload({ file: filePath, mimeType });
-  let backoff = 500;
-  while (fileObj && (fileObj.state === 'PROCESSING' || fileObj.state === 'STATE_UNSPECIFIED')) {
-    if (Date.now() >= deadline) {
-      throw new Error(`Files API upload timed out waiting for ACTIVE state on ${filePath}`);
-    }
-    await sleep(Math.min(backoff, Math.max(100, deadline - Date.now())));
-    backoff = Math.min(backoff * 1.5, 3000);
-    fileObj = await ai.files.get({ name: fileObj.name });
-  }
-  if (!fileObj || fileObj.state !== 'ACTIVE') {
-    throw new Error(`Files API upload failed for ${filePath}: state=${fileObj?.state}`);
-  }
-  return fileObj;
+  return JSON.stringify(res ?? {});
 }
 
 /**
- * Multi-turn function-calling tool loop on the Interactions API (§0.3).
- * Sends tool declarations, executes each returned function call through the caller's handler,
- * returns the `function_result` (plus any media attachments), and repeats until the model calls
- * `finish` or `maxToolCalls` / `deadlineMs` is reached. Every turn is traced and metered.
+ * Runs a multi-turn function-calling tool loop on the Interactions API.
+ * Repeats until the model calls `finish` or `maxToolCalls` / `deadlineMs` is reached.
+ * Under `ORCH_FAKE=1`, replays `fakeToolScript` if provided.
  */
-function capToolResult(result, maxChars) {
-  if (!result || typeof result !== 'object') return result;
-  if (JSON.stringify(result).length <= maxChars) return result;
-  const capped = { ...result, truncated: true };
-  // Logs keep their tail (where errors are); everything else keeps its head.
-  const tailKeys = new Set(['output', 'log', 'stdout', 'stderr', 'error']);
-  const stringKeys = Object.keys(capped)
-    .filter((k) => typeof capped[k] === 'string')
-    .sort((a, b) => capped[b].length - capped[a].length);
-  for (const k of stringKeys) {
-    if (JSON.stringify(capped).length <= maxChars) break;
-    const keep = Math.max(500, capped[k].length - (JSON.stringify(capped).length - maxChars) - 100);
-    capped[k] = tailKeys.has(k) ? `…${capped[k].slice(-keep)}` : `${capped[k].slice(0, keep)}…`;
-  }
-  if (JSON.stringify(capped).length <= maxChars) return capped;
-  return { ok: result.ok, truncated: true, preview: JSON.stringify(result).slice(0, maxChars) };
-}
-
-function summarizeToolCall(entry) {
-  const args = JSON.stringify(entry.arguments || {}).slice(0, 100);
-  const r = entry.result || {};
-  let outcome;
-  if (r.ok === false) outcome = `error: ${String(r.error || '').slice(0, 100)}`;
-  else if (entry.name === 'read_file') outcome = `lines ${r.startLine}-${r.endLine} of ${r.totalLines}`;
-  else if (entry.name === 'search') outcome = `${(r.matches || []).length} matches`;
-  else if (entry.name === 'run') outcome = `exit ${r.exitCode ?? r.code ?? '?'}`;
-  else outcome = 'ok';
-  return `${entry.name}(${args}) -> ${outcome}`;
-}
-
-function buildRolloverInput({ input, history, latestInputs, toolCallsUsed, maxToolCalls }) {
-  const taskParts = Array.isArray(input) ? input : [{ type: 'text', text: String(input) }];
-  const changed = [
-    ...new Set(
-      history
-        .filter((h) => ['write_file', 'edit_file'].includes(h.name) && h.result?.ok !== false)
-        .map((h) => h.arguments?.path)
-        .filter(Boolean)
-    ),
-  ];
-  const progress = [
-    'CONTEXT RESET: your earlier conversation was dropped to save quota. The original task is above; your progress so far is below.',
-    `Tool calls used: ${toolCallsUsed} of ${maxToolCalls}.`,
-    `Files you have changed (already saved in the worktree): ${changed.length ? changed.join(', ') : 'none yet'}.`,
-    'Every tool call so far, oldest first:',
-    ...history.map((h, i) => `${i + 1}. ${summarizeToolCall(h)}`),
-    'File contents you read earlier are no longer in context; re-read only the line ranges you need. The results of your most recent calls follow.',
-  ].join('\n');
-  const latest = latestInputs.map((part) =>
-    part.type === 'function_result'
-      ? { type: 'text', text: `[Result of ${part.name}]: ${JSON.stringify(part.result)}` }
-      : part
-  );
-  return [...taskParts, { type: 'text', text: progress }, ...latest];
-}
-
 export async function runToolLoop({
   role = 'patcher',
   model = 'gemini-4-argon',
   thinking = 'high',
-  mediaResolution = 'high',
   tools = [],
-  toolHandlers = {},
   input,
+  systemInstruction = undefined,
   taskId = 'tool_loop',
   maxToolCalls = 60,
   deadlineMs = 1_200_000,
   pollTimeoutMs = 90_000,
   previousInteractionId = undefined,
+  executeTool,
+  fakeToolScript = undefined,
   rootDir = DEFAULT_ROOT,
   tracePath = path.join(rootDir, 'runs/orchestrator/trace.jsonl'),
   state = undefined,
   budgetUsd = Infinity,
   maxCalls = Infinity,
-  fakeToolTurns = undefined,
   fakeHandler = undefined,
-  interactionsClient = undefined,
-  contextTokenBudget = 60_000,
-  maxToolResultChars = 8_000,
+  aiClient = undefined,
 }) {
-  const spendState = ensurePersistentSpendState(state, tracePath);
-  const startMs = Date.now();
-  const loopDeadline = startMs + deadlineMs;
-
-  const toolMap = new Map();
-  for (const t of tools) {
-    toolMap.set(t.name, t);
+  if (typeof executeTool !== 'function') {
+    throw new Error('runToolLoop requires an executeTool(call) handler function');
   }
 
-  const scriptedTurns =
-    fakeToolTurns ||
-    (Array.isArray(globalThis.__ORCH_FAKE_TOOL_TURNS) ? globalThis.__ORCH_FAKE_TOOL_TURNS : null);
-
-  let turnIndex = 0;
-  let toolCallsUsed = 0;
-  let prevId = previousInteractionId;
+  const activeState = ensureTraceStateInitialized(state || { totalCostUsd: 0, totalCalls: 0 }, tracePath);
+  const loopStartMs = Date.now();
   let currentInput = input;
-  let finished = false;
-  let finishReport = null;
-  const history = [];
-  let rollovers = 0;
+  let prevId = previousInteractionId;
+  let toolCallsCount = 0;
+  let turnIndex = 0;
+  const toolHistory = [];
 
-  while (!finished && toolCallsUsed < maxToolCalls && Date.now() < loopDeadline) {
-    const remainingMs = loopDeadline - Date.now();
-    if (remainingMs <= 0) break;
+  const scriptedTurns =
+    fakeToolScript ||
+    (process.env.ORCH_FAKE === '1' && Array.isArray(globalThis.__ORCH_FAKE_TOOL_SCRIPT)
+      ? globalThis.__ORCH_FAKE_TOOL_SCRIPT
+      : null);
 
-    const turnTaskId = `${taskId}:turn-${turnIndex}`;
-    const turnFakeHandler =
-      scriptedTurns && !fakeHandler
-        ? async ({ previousInteractionId: pId }) => {
-            const scriptedCalls = scriptedTurns[turnIndex] || [
-              {
-                id: `call_finish_auto_${turnIndex}`,
-                name: 'finish',
-                arguments: {
-                  report: {
-                    summary: 'Finished scripted sequence',
-                    addressed: [],
-                    skipped: [],
-                  },
-                },
-              },
-            ];
-            return {
-              interactionId: `fake_tool_${taskId}_${turnIndex}_${pId ? 'cont' : 'init'}`,
-              inputTokens: 450,
-              outputTokens: 160,
-              functionCalls: scriptedCalls.map((c, idx) => ({
-                id: c.id || `call_${turnIndex}_${idx + 1}`,
-                name: c.name,
-                arguments: c.arguments || c.args || {},
-              })),
-              output: { functionCalls: scriptedCalls },
-            };
-          }
-        : fakeHandler;
+  const effectiveFakeHandler =
+    fakeHandler ||
+    (scriptedTurns
+      ? async ({ taskId: tId, previousInteractionId: pId }) => {
+          const turnSpec = scriptedTurns[turnIndex] ?? [];
+          const normalizedCalls = (Array.isArray(turnSpec) ? turnSpec : [turnSpec]).map(
+            (c, idx) => ({
+              id: c.id || `fake_call_${turnIndex}_${idx}`,
+              name: c.name,
+              arguments: c.arguments || c.args || {},
+            })
+          );
+          return {
+            interactionId: `fake_tool_${tId}_${turnIndex}`,
+            inputTokens: 300,
+            outputTokens: 150,
+            output: {},
+            rawText: '',
+            functionCalls: normalizedCalls,
+            status: normalizedCalls.length > 0 ? 'requires_action' : 'completed',
+            previousInteractionId: pId,
+          };
+        }
+      : undefined);
+
+  while (true) {
+    const elapsedMs = Date.now() - loopStartMs;
+    if (elapsedMs >= deadlineMs) {
+      return {
+        finished: false,
+        finishReason: 'deadline',
+        report: null,
+        toolCalls: toolHistory,
+        toolCallsCount,
+        interactionId: prevId,
+        state: activeState,
+      };
+    }
+
+    if (toolCallsCount >= maxToolCalls) {
+      return {
+        finished: false,
+        finishReason: 'max_tool_calls',
+        report: null,
+        toolCalls: toolHistory,
+        toolCallsCount,
+        interactionId: prevId,
+        state: activeState,
+      };
+    }
+
+    const remainingLoopMs = Math.max(100, deadlineMs - elapsedMs);
+    const effectivePollTimeout = Math.min(pollTimeoutMs, remainingLoopMs);
 
     const callRes = await callModel({
       role,
       model,
       thinking,
-      mediaResolution,
-      media_resolution: mediaResolution,
       input: currentInput,
       tools,
-      taskId: turnTaskId,
+      systemInstruction,
+      taskId: `${taskId}:turn${turnIndex}`,
       background: true,
-      pollTimeoutMs: Math.min(pollTimeoutMs, remainingMs),
       previousInteractionId: prevId,
+      pollTimeoutMs: effectivePollTimeout,
       rootDir,
       tracePath,
-      state: spendState,
+      state: activeState,
       budgetUsd,
       maxCalls,
-      fakeHandler: turnFakeHandler,
-      interactionsClient,
+      fakeHandler: effectiveFakeHandler,
+      aiClient,
     });
 
-    prevId = callRes.interactionId;
     turnIndex += 1;
+    prevId = callRes.interactionId;
+    const fnCalls = callRes.functionCalls || [];
 
-    const functionCalls =
-      Array.isArray(callRes.functionCalls) && callRes.functionCalls.length > 0
-        ? callRes.functionCalls
-        : Array.isArray(callRes.output?.functionCalls)
-          ? callRes.output.functionCalls
-          : [];
-
-    if (functionCalls.length === 0) {
-      if (callRes.output && (callRes.output.summary || callRes.output.addressed)) {
-        finishReport = callRes.output;
-        finished = true;
-      }
-      break;
+    if (fnCalls.length === 0) {
+      return {
+        finished: false,
+        finishReason: 'no_tool_call',
+        report: callRes.output || null,
+        toolCalls: toolHistory,
+        toolCallsCount,
+        interactionId: prevId,
+        state: activeState,
+      };
     }
 
-    const nextTurnInputs = [];
-
-    for (const fc of functionCalls) {
-      if (toolCallsUsed >= maxToolCalls || Date.now() >= loopDeadline) {
-        break;
+    const nextResults = [];
+    for (const fnCall of fnCalls) {
+      if (Date.now() - loopStartMs >= deadlineMs) {
+        return {
+          finished: false,
+          finishReason: 'deadline',
+          report: null,
+          toolCalls: toolHistory,
+          toolCallsCount,
+          interactionId: prevId,
+          state: activeState,
+        };
       }
-      toolCallsUsed += 1;
-      const callId = fc.id || `call_${turnIndex}_${toolCallsUsed}`;
-      const args = fc.arguments || fc.args || {};
-      const toolSpec = toolMap.get(fc.name);
-      const handler = toolSpec?.handler || toolHandlers?.[fc.name];
-
-      if (process.env.ORCH_FAKE !== '1') {
-        const argPreview = JSON.stringify(args).slice(0, 140);
-        console.error(`  [tool:${taskId}] #${toolCallsUsed} ${fc.name}(${argPreview})`);
+      if (toolCallsCount >= maxToolCalls) {
+        return {
+          finished: false,
+          finishReason: 'max_tool_calls',
+          report: null,
+          toolCalls: toolHistory,
+          toolCallsCount,
+          interactionId: prevId,
+          state: activeState,
+        };
       }
 
-      let rawResult;
+      toolCallsCount += 1;
+      const callId = fnCall.id || `call_${turnIndex}_${toolCallsCount}`;
+
+      if (fnCall.name === 'finish') {
+        let finishResult = fnCall.arguments || {};
+        try {
+          const maybeHandled = await executeTool({
+            id: callId,
+            name: 'finish',
+            arguments: fnCall.arguments || {},
+          });
+          if (maybeHandled !== undefined) {
+            finishResult = maybeHandled;
+          }
+        } catch {
+          // Use raw arguments if executeTool doesn't handle finish
+        }
+        toolHistory.push({
+          id: callId,
+          name: 'finish',
+          arguments: fnCall.arguments || {},
+          result: finishResult,
+        });
+        return {
+          finished: true,
+          finishReason: 'finish',
+          report: fnCall.arguments?.report || fnCall.arguments || finishResult,
+          toolCalls: toolHistory,
+          toolCallsCount,
+          interactionId: prevId,
+          state: activeState,
+        };
+      }
+
+      let toolResult;
+      let isError = false;
       try {
-        if (typeof handler === 'function') {
-          rawResult = await handler(args, { id: callId, name: fc.name, turn: turnIndex, toolCallsUsed });
-        } else {
-          rawResult = { ok: false, error: `Unknown tool '${fc.name}'` };
+        toolResult = await executeTool({
+          id: callId,
+          name: fnCall.name,
+          arguments: fnCall.arguments || {},
+        });
+        if (toolResult && typeof toolResult === 'object' && toolResult.isError === true) {
+          isError = true;
         }
       } catch (toolErr) {
-        rawResult = { ok: false, error: toolErr.message || String(toolErr) };
+        isError = true;
+        toolResult = { error: toolErr.message || String(toolErr) };
       }
 
-      const mediaParts =
-        rawResult && typeof rawResult === 'object'
-          ? rawResult.__mediaParts || rawResult.mediaParts || []
-          : [];
-
-      let cleanResult = rawResult;
-      if (rawResult && typeof rawResult === 'object' && ('__mediaParts' in rawResult || 'mediaParts' in rawResult)) {
-        const { __mediaParts, mediaParts: _mp, ...rest } = rawResult;
-        cleanResult = rest;
-      }
-      cleanResult = capToolResult(cleanResult, maxToolResultChars);
-
-      history.push({
+      toolHistory.push({
         id: callId,
-        name: fc.name,
-        arguments: args,
-        result: cleanResult,
-        interactionId: prevId,
+        name: fnCall.name,
+        arguments: fnCall.arguments || {},
+        result: toolResult,
+        isError,
       });
 
-      nextTurnInputs.push({
+      nextResults.push({
         type: 'function_result',
         call_id: callId,
-        name: fc.name,
-        result: cleanResult ?? { ok: true },
+        name: fnCall.name,
+        result: formatToolResultForApi(toolResult),
+        ...(isError ? { is_error: true } : {}),
       });
-
-      if (Array.isArray(mediaParts) && mediaParts.length > 0) {
-        for (const mp of mediaParts) {
-          nextTurnInputs.push(mp);
-        }
-      }
-
-      if (fc.name === 'finish' && cleanResult?.ok !== false) {
-        finished = true;
-        finishReport = cleanResult?.report || args?.report || args || cleanResult;
-        break;
-      }
     }
 
-    currentInput = nextTurnInputs;
+    currentInput = nextResults;
+  }
+}
 
-    // Every turn re-sends the whole server-side conversation, so once it passes the budget,
-    // start a fresh interaction holding the task, a one-line log of past calls and only the
-    // latest results.
-    if (!finished && Number(callRes.inputTokens) > contextTokenBudget) {
-      rollovers += 1;
-      if (process.env.ORCH_FAKE !== '1') {
-        console.error(`  [tool:${taskId}] context ${callRes.inputTokens} tokens > ${contextTokenBudget}; rolling over (#${rollovers})`);
-      }
-      currentInput = buildRolloverInput({ input, history, latestInputs: nextTurnInputs, toolCallsUsed, maxToolCalls });
-      prevId = undefined;
-    }
+/**
+ * Uploads a video or media file via the Gemini Files API and polls until ACTIVE.
+ * Under ORCH_FAKE=1 returns a deterministic fake URI.
+ */
+export async function uploadMediaFile({
+  filePath,
+  mimeType = 'video/webm',
+  pollTimeoutMs = 90_000,
+  aiClient = undefined,
+}) {
+  if (process.env.ORCH_FAKE === '1' && !aiClient) {
+    return {
+      name: `files/fake_${path.basename(filePath)}`,
+      uri: `https://generativelanguage.googleapis.com/v1beta/files/fake_${path.basename(filePath)}`,
+      mimeType,
+      state: 'ACTIVE',
+    };
   }
 
-  return {
-    finished,
-    report: finishReport || {
-      summary: finished ? 'Completed patcher turn' : 'Stopped at tool-call or deadline cap',
-      addressed: [],
-      skipped: [],
-    },
-    toolCallsUsed,
-    turns: turnIndex,
-    rollovers,
-    history,
-    lastInteractionId: prevId,
-    state: spendState,
-  };
+  let ai = aiClient;
+  if (!ai) {
+    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    if (!apiKey) {
+      throw new Error('Missing GEMINI_API_KEY / GOOGLE_API_KEY for file upload');
+    }
+    const { GoogleGenAI } = await import('@google/genai');
+    ai = new GoogleGenAI({ apiKey });
+  }
+
+  const startMs = Date.now();
+  let uploaded = await withTimeout(
+    ai.files.upload({ file: filePath, config: { mimeType } }),
+    pollTimeoutMs,
+    `files.upload(${path.basename(filePath)})`
+  );
+
+  let backoff = 500;
+  while (uploaded.state === 'PROCESSING' || uploaded.state === 'STATE_UNSPECIFIED') {
+    if (Date.now() - startMs >= pollTimeoutMs) {
+      const err = new Error(`File upload polling exceeded deadline (${pollTimeoutMs}ms) for ${filePath}`);
+      err.code = 'DEADLINE_EXCEEDED';
+      throw err;
+    }
+    await sleep(backoff);
+    backoff = Math.min(backoff * 1.5, 4000);
+    uploaded = await withTimeout(
+      ai.files.get({ name: uploaded.name }),
+      Math.max(1000, pollTimeoutMs - (Date.now() - startMs)),
+      `files.get(${uploaded.name})`
+    );
+  }
+
+  if (uploaded.state !== 'ACTIVE') {
+    throw new Error(`Uploaded file ${uploaded.name} failed processing with state: ${uploaded.state}`);
+  }
+
+  return uploaded;
 }
 
 export async function runOrchestrator(plan, options = {}) {
@@ -1071,7 +890,10 @@ export async function runOrchestrator(plan, options = {}) {
       execSync(cmd, { cwd, stdio: 'pipe' });
     });
 
-  const state = ensurePersistentSpendState(options.state, tracePath);
+  const state = ensureTraceStateInitialized(
+    options.state || { totalCostUsd: 0, totalCalls: 0 },
+    tracePath
+  );
   const waves = buildWaves(plan.tasks || []);
   const completedTasks = new Map();
   const executionOrder = [];
@@ -1094,7 +916,7 @@ export async function runOrchestrator(plan, options = {}) {
           let succeeded = false;
           let taskOutput = null;
 
-          const maxAttempts = 3; // Initial try + up to 2 repair retries, then escalate on 3rd failure
+          const maxAttempts = 3;
           for (let attempt = 0; attempt < maxAttempts; attempt++) {
             const promptPayload = {
               taskId: task.id,
@@ -1121,7 +943,6 @@ export async function runOrchestrator(plan, options = {}) {
             prevId = callRes.interactionId;
             taskOutput = callRes.output || { files: [], notes: '', board: [] };
 
-            // Validate ownership of all proposed file writes BEFORE touching disk
             for (const f of taskOutput.files || []) {
               const check = validateOwnership(roleSpec, f.path, workDir);
               if (!check.ok) {
@@ -1129,22 +950,22 @@ export async function runOrchestrator(plan, options = {}) {
               }
             }
 
-            // Write validated files
             for (const f of taskOutput.files || []) {
               const abs = path.resolve(workDir, f.path);
               fs.mkdirSync(path.dirname(abs), { recursive: true });
               fs.writeFileSync(abs, f.content, 'utf8');
             }
 
-            // Record blackboard notes
             if (Array.isArray(taskOutput.board) && taskOutput.board.length > 0) {
               fs.mkdirSync(path.dirname(boardPath), { recursive: true });
               for (const b of taskOutput.board) {
-                fs.appendFileSync(boardPath, JSON.stringify({ ts: new Date().toISOString(), from: task.role, ...b }) + '\n');
+                fs.appendFileSync(
+                  boardPath,
+                  JSON.stringify({ ts: new Date().toISOString(), from: task.role, ...b }) + '\n'
+                );
               }
             }
 
-            // Run acceptance commands
             try {
               for (const cmd of task.acceptance || []) {
                 await runAcceptance(cmd, workDir, { task, attempt, output: taskOutput });
@@ -1161,7 +982,6 @@ export async function runOrchestrator(plan, options = {}) {
           }
 
           if (!succeeded) {
-            // Escalate to lead_architect (argon high) after 2 failed repair retries
             const leadSpec = roles.get('lead_architect');
             const escRes = await callModel({
               role: 'lead_architect',
@@ -1229,11 +1049,11 @@ function ensureIntegrationBranch(rootDir) {
   }
 }
 
-function createTaskWorktree(rootDir, taskId) {
+export function createTaskWorktree(rootDir, taskId, baseBranch = 'integration') {
   const safeId = taskId.replace(/[^a-zA-Z0-9_-]/g, '_');
   const wtDir = path.join(rootDir, 'wt', safeId);
   fs.rmSync(wtDir, { recursive: true, force: true });
-  execSync(`git worktree add -B task/${safeId} "${wtDir}" integration`, { cwd: rootDir, stdio: 'pipe' });
+  execSync(`git worktree add -B task/${safeId} "${wtDir}" ${baseBranch}`, { cwd: rootDir, stdio: 'pipe' });
   const rootModules = path.join(rootDir, 'node_modules');
   const wtModules = path.join(wtDir, 'node_modules');
   if (fs.existsSync(rootModules) && !fs.existsSync(wtModules)) {
@@ -1242,20 +1062,20 @@ function createTaskWorktree(rootDir, taskId) {
   return wtDir;
 }
 
-function commitAndMergeWorktree(rootDir, wtDir, taskId) {
+export function commitAndMergeWorktree(rootDir, wtDir, taskId, targetBranch = 'integration') {
   const safeId = taskId.replace(/[^a-zA-Z0-9_-]/g, '_');
   const status = execSync('git status --porcelain', { cwd: wtDir, encoding: 'utf8' }).trim();
   if (status) {
     execSync('git add -A', { cwd: wtDir, stdio: 'pipe' });
     execSync(`git commit -m "task(${safeId}): complete subagent task"`, { cwd: wtDir, stdio: 'pipe' });
-    execSync(`git merge --no-ff task/${safeId} -m "Merge task/${safeId} into integration"`, {
+    execSync(`git merge --no-ff task/${safeId} -m "Merge task/${safeId} into ${targetBranch}"`, {
       cwd: rootDir,
       stdio: 'pipe',
     });
   }
 }
 
-function removeTaskWorktree(rootDir, wtDir, taskId) {
+export function removeTaskWorktree(rootDir, wtDir, taskId) {
   const safeId = taskId.replace(/[^a-zA-Z0-9_-]/g, '_');
   try {
     execSync(`git worktree remove --force "${wtDir}"`, { cwd: rootDir, stdio: 'pipe' });
@@ -1270,113 +1090,49 @@ function removeTaskWorktree(rootDir, wtDir, taskId) {
 }
 
 /**
- * Worktree helpers for the Visual Feedback Loop (Prompt 2 §4.1 & §4.6).
+ * Worktree helpers for the Visual Feedback Loop (Prompt 2):
+ * Creates worktree `wt/loop-<runId>` on branch `loop/<runId>` from `baseBranch`.
  */
 export function createLoopWorktree(rootDir, runId, baseBranch = 'main') {
-  const safeId = String(runId).replace(/[^a-zA-Z0-9_-]/g, '_');
-  const branchName = `loop/${safeId}`;
+  const safeId = runId.replace(/[^a-zA-Z0-9_-]/g, '_');
   const wtDir = path.join(rootDir, 'wt', `loop-${safeId}`);
-
-  try {
-    execSync(`git show-ref --verify --quiet refs/heads/${baseBranch}`, { cwd: rootDir, stdio: 'pipe' });
-  } catch {
-    execSync(`git branch ${baseBranch} HEAD`, { cwd: rootDir, stdio: 'pipe' });
-  }
-
-  try {
-    execSync(`git worktree remove --force "${wtDir}"`, { cwd: rootDir, stdio: 'pipe' });
-  } catch {
-    fs.rmSync(wtDir, { recursive: true, force: true });
-  }
+  const branchName = `loop/${safeId}`;
+  fs.rmSync(wtDir, { recursive: true, force: true });
   try {
     execSync('git worktree prune', { cwd: rootDir, stdio: 'pipe' });
   } catch {
     // ignore
   }
-
   execSync(`git worktree add -B "${branchName}" "${wtDir}" "${baseBranch}"`, {
     cwd: rootDir,
     stdio: 'pipe',
   });
-
   const rootModules = path.join(rootDir, 'node_modules');
   const wtModules = path.join(wtDir, 'node_modules');
   if (fs.existsSync(rootModules) && !fs.existsSync(wtModules)) {
     fs.symlinkSync(rootModules, wtModules, 'dir');
   }
-
   const startCommit = execSync('git rev-parse HEAD', { cwd: wtDir, encoding: 'utf8' }).trim();
-  return { workDir: wtDir, branchName, startCommit };
+  return { wtDir, branchName, startCommit };
 }
 
-export function removeLoopWorktree(rootDir, wtDir, branchName, deleteBranch = false) {
+export function removeLoopWorktree(rootDir, wtDir) {
+  try {
+    const wtModules = path.join(wtDir, 'node_modules');
+    if (fs.existsSync(wtModules) && fs.lstatSync(wtModules).isSymbolicLink()) {
+      fs.unlinkSync(wtModules);
+    }
+  } catch {
+    // ignore
+  }
   try {
     execSync(`git worktree remove --force "${wtDir}"`, { cwd: rootDir, stdio: 'pipe' });
   } catch {
     fs.rmSync(wtDir, { recursive: true, force: true });
-  }
-  try {
-    execSync('git worktree prune', { cwd: rootDir, stdio: 'pipe' });
-  } catch {
-    // ignore
-  }
-  if (deleteBranch && branchName) {
     try {
-      execSync(`git branch -D "${branchName}"`, { cwd: rootDir, stdio: 'pipe' });
+      execSync('git worktree prune', { cwd: rootDir, stdio: 'pipe' });
     } catch {
       // ignore
     }
-  }
-}
-
-export function mergeLoopWorktree(rootDir, wtDir, runId, baseBranch = 'main') {
-  const safeId = String(runId).replace(/[^a-zA-Z0-9_-]/g, '_');
-  const branchName = `loop/${safeId}`;
-
-  // Remove the worktree checkout first so branch/worktree locks don't interfere
-  removeLoopWorktree(rootDir, wtDir, branchName, false);
-
-  try {
-    const currentBranch = execSync('git rev-parse --abbrev-ref HEAD', {
-      cwd: rootDir,
-      encoding: 'utf8',
-    }).trim();
-    if (currentBranch !== baseBranch) {
-      execSync(`git checkout "${baseBranch}"`, { cwd: rootDir, stdio: 'pipe' });
-    }
-    execSync(`git merge --no-ff "${branchName}" -m "Merge ${branchName} into ${baseBranch}"`, {
-      cwd: rootDir,
-      stdio: 'pipe',
-    });
-    return {
-      merged: true,
-      conflict: false,
-      conflictingFiles: [],
-      branch: branchName,
-    };
-  } catch {
-    let conflictingFiles = [];
-    try {
-      const out = execSync('git diff --name-only --diff-filter=U', {
-        cwd: rootDir,
-        encoding: 'utf8',
-      }).trim();
-      if (out) {
-        conflictingFiles = out.split('\n').map((s) => s.trim()).filter(Boolean);
-      }
-    } catch {
-      // ignore
-    }
-    try {
-      execSync('git merge --abort', { cwd: rootDir, stdio: 'pipe' });
-    } catch {
-      // ignore
-    }
-    return {
-      merged: false,
-      conflict: true,
-      conflictingFiles,
-      branch: branchName,
-    };
   }
 }

@@ -32,7 +32,7 @@
     "captureShot": "captureShot",
     "audit": "audit",
     "tileSheet": "getTileSheet",
-    "injectDefect": null,
+    "injectDefect": "injectDefect",
     "playAt": "playAt",
     "botMove": "botMove",
     "showLegalMoves": "showLegalMoves",

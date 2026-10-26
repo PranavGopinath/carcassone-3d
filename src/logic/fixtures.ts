@@ -6,9 +6,14 @@ export function loadNamedFixture(name: string): GameState {
   if (name === 'initial' || name === 'start') {
     return createInitialState();
   }
+  if (name === 'fixture-midgame') {
+    return runReplay(CANONICAL_MOVES.slice(0, 11));
+  }
   if (name === 'demo-board') {
     return runReplay(CANONICAL_MOVES.slice(0, 15));
   }
-  // Default / 'fixture-all-features' runs the full 19-move canonical playthrough
-  return runReplay(CANONICAL_MOVES);
+  if (name === 'fixture-all-features') {
+    return runReplay(CANONICAL_MOVES);
+  }
+  throw new Error(`Unknown fixture name: '${name}'`);
 }
